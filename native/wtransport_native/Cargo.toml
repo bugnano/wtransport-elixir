@@ -1,0 +1,16 @@
+[package]
+name = "wtransport_native"
+version = "0.1.0"
+authors = []
+edition = "2021"
+
+[lib]
+name = "wtransport_native"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.29.1"
+tokio = { version = "1", features = ["full"] }
+wtransport = { git = "https://github.com/BiagioFesta/wtransport.git" }
+
