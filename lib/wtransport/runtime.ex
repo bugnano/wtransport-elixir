@@ -26,7 +26,7 @@ defmodule Wtransport.Runtime do
       runtime: runtime
     }
 
-    #Process.send_after(self(), :stop_runtime, 2500)
+    # Process.send_after(self(), :stop_runtime, 2500)
 
     {:ok, initial_state}
   end
@@ -59,6 +59,16 @@ defmodule Wtransport.Runtime do
     IO.puts("[FRI] -- Wtransport.Runtime.handle_info :stop_runtime")
     {:ok, {}} = Wtransport.Native.stop_runtime(state.runtime)
     IO.puts("[FRI] -- After Wtransport.Runtime.handle_info :stop_runtime")
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:session_request, %Wtransport.SessionRequest{} = request}, state) do
+    IO.puts("[FRI] -- Wtransport.Runtime.handle_info :session_request")
+
+    {:ok, _pid} =
+      DynamicSupervisor.start_child(Wtransport.DynamicSupervisor, {Wtransport.Handler, request})
+
     {:noreply, state}
   end
 end

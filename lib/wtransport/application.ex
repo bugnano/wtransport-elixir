@@ -10,7 +10,8 @@ defmodule Wtransport.Application do
     children = [
       # Starts a worker by calling: Wtransport.Worker.start_link(arg)
       # {Wtransport.Worker, arg}
-      {Wtransport.Runtime, []}
+      {Wtransport.Runtime, []},
+      {DynamicSupervisor, name: Wtransport.DynamicSupervisor, strategy: :one_for_one}
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
