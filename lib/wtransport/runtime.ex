@@ -26,7 +26,7 @@ defmodule Wtransport.Runtime do
       runtime: runtime
     }
 
-    Process.send_after(self(), :stop_runtime, 2500)
+    #Process.send_after(self(), :stop_runtime, 2500)
 
     {:ok, initial_state}
   end
@@ -56,9 +56,9 @@ defmodule Wtransport.Runtime do
 
   @impl true
   def handle_info(:stop_runtime, state) do
-    IO.puts("[FRI] -- Wtransport.Runtime.handle_info :fri")
+    IO.puts("[FRI] -- Wtransport.Runtime.handle_info :stop_runtime")
     {:ok, {}} = Wtransport.Native.stop_runtime(state.runtime)
-    IO.puts("[FRI] -- After Wtransport.Runtime.handle_info :fri")
+    IO.puts("[FRI] -- After Wtransport.Runtime.handle_info :stop_runtime")
     {:noreply, state}
   end
 end

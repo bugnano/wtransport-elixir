@@ -12,5 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.29.1"
 tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
 wtransport = { git = "https://github.com/BiagioFesta/wtransport.git" }
 
