@@ -6,7 +6,10 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::info_span;
+use tracing::trace;
 use tracing::Instrument;
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::EnvFilter;
 use wtransport::endpoint::IncomingSession;
 use wtransport::tls::Certificate;
 use wtransport::Endpoint;
@@ -17,12 +20,14 @@ mod atoms {
         ok,
         error,
         session_request,
+        datagram_received,
     }
 }
 
 struct XRuntime(tokio::runtime::Runtime);
 struct XShutdownSender(tokio::sync::broadcast::Sender<()>);
 struct XSessionRequestSender(tokio::sync::mpsc::Sender<(Atom, LocalPid)>);
+struct XDatagramSender(tokio::sync::mpsc::Sender<String>);
 
 #[derive(NifStruct)]
 #[module = "Wtransport.NifRuntime"]
@@ -32,24 +37,37 @@ struct NifRuntime {
 }
 
 #[derive(NifStruct)]
-#[module = "Wtransport.SessionRequest"]
-struct SessionRequest {
+#[module = "Wtransport.Socket"]
+struct Socket {
     authority: String,
     path: String,
-    channel: ResourceArc<XSessionRequestSender>,
+    session_request_tx: ResourceArc<XSessionRequestSender>,
+    send_dgram_tx: ResourceArc<XDatagramSender>,
 }
 
 fn load(env: Env, _term: Term) -> bool {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
+    init_logging();
 
-    debug!("[FRI] -- load -- term: {:?}", _term);
+    debug!("load(term: {:?})", _term);
+
     rustler::resource!(XRuntime, env);
     rustler::resource!(XShutdownSender, env);
     rustler::resource!(XSessionRequestSender, env);
+    rustler::resource!(XDatagramSender, env);
 
     true
+}
+
+fn init_logging() {
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+
+    tracing_subscriber::fmt()
+        .with_target(true)
+        .with_level(true)
+        .with_env_filter(env_filter)
+        .init();
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -57,18 +75,21 @@ fn start_runtime(
     pid: LocalPid,
     host: &str,
     port: u16,
-    cert_chain: &str,
-    priv_key: &str,
+    certfile: &str,
+    keyfile: &str,
 ) -> Result<NifRuntime, String> {
-    debug!("[FRI] -- start_runtime -- pid: {:?}", pid.as_c_arg());
-    debug!("[FRI] -- start_runtime -- host: {:?}", host);
-    debug!("[FRI] -- start_runtime -- port: {:?}", port);
-    debug!("[FRI] -- start_runtime -- cert_chain: {:?}", cert_chain);
-    debug!("[FRI] -- start_runtime -- priv_key: {:?}", priv_key);
+    debug!(
+        "start_runtime(pid: {:?}, host: {:?}, port: {:?}, certfile: {:?}, keyfile: {:?})",
+        pid.as_c_arg(),
+        host,
+        port,
+        certfile,
+        keyfile
+    );
 
     let now = std::time::Instant::now();
 
-    match start_runtime_impl(pid, host, port, cert_chain, priv_key) {
+    match start_runtime_impl(pid, host, port, certfile, keyfile) {
         Ok(runtime) => {
             let elapsed_time = now.elapsed();
             debug!("elapsed_time: {:?}", elapsed_time);
@@ -86,8 +107,8 @@ fn start_runtime_impl(
     pid: LocalPid,
     host: &str,
     port: u16,
-    cert_chain: &str,
-    priv_key: &str,
+    certfile: &str,
+    keyfile: &str,
 ) -> Result<NifRuntime, Box<dyn Error>> {
     let (tx, rx) = std::sync::mpsc::channel();
     let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
@@ -98,7 +119,7 @@ fn start_runtime_impl(
         return Err("bind_address is empty".into());
     };
 
-    let certificate = Certificate::load(cert_chain, priv_key)?;
+    let certificate = Certificate::load(certfile, keyfile)?;
 
     let config = ServerConfig::builder()
         .with_bind_address(bind_address)
@@ -194,15 +215,17 @@ async fn handle_connection_impl(
     info!("New session: Authority: '{}', Path: '{}'", authority, path);
 
     let (session_request_tx, mut session_request_rx) = tokio::sync::mpsc::channel(1);
+    let (send_dgram_tx, mut send_dgram_rx) = tokio::sync::mpsc::channel(1);
 
     let mut msg_env = OwnedEnv::new();
     msg_env.send_and_clear(&runtime_pid, |env| {
         (
             atoms::session_request(),
-            SessionRequest {
+            Socket {
                 authority: authority,
                 path: path,
-                channel: ResourceArc::new(XSessionRequestSender(session_request_tx)),
+                session_request_tx: ResourceArc::new(XSessionRequestSender(session_request_tx)),
+                send_dgram_tx: ResourceArc::new(XDatagramSender(send_dgram_tx)),
             },
         )
             .encode(env)
@@ -224,7 +247,6 @@ async fn handle_connection_impl(
 
     loop {
         tokio::select! {
-            // TODO: session_request_rx can receive new data if the supervisor restarts the process
             stream = connection.accept_bi() => {
                 let mut stream = stream?;
                 info!("Accepted BI stream");
@@ -260,9 +282,18 @@ async fn handle_connection_impl(
                 let dgram = dgram?;
                 let str_data = std::str::from_utf8(&dgram)?;
 
-                info!("Received (dgram) '{str_data}' from client");
+                msg_env.send_and_clear(&pid, |env| {
+                    (
+                        atoms::datagram_received(),
+                        str_data,
+                    )
+                        .encode(env)
+                });
 
-                connection.send_datagram(b"ACK")?;
+                trace!("Received (dgram) '{str_data}' from client");
+            }
+            Some(dgram) = send_dgram_rx.recv() => {
+                connection.send_datagram(dgram)?;
             }
             _ = shutdown_rx.recv() => {
                 info!("Connection loop stopped");
@@ -289,16 +320,28 @@ fn stop_runtime(runtime: NifRuntime) -> Result<(), String> {
 }
 
 #[rustler::nif]
-fn reply_session_request(
-    request: SessionRequest,
-    result: Atom,
-    pid: LocalPid,
-) -> Result<(), String> {
+fn reply_session_request(socket: Socket, result: Atom, pid: LocalPid) -> Result<(), String> {
     debug!("[FRI] -- call to reply_session_request()");
 
     let now = std::time::Instant::now();
 
-    match request.channel.0.blocking_send((result, pid)) {
+    match socket.session_request_tx.0.blocking_send((result, pid)) {
+        Ok(_) => {
+            let elapsed_time = now.elapsed();
+            debug!("elapsed_time: {:?}", elapsed_time);
+            Ok(())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[rustler::nif]
+fn send_datagram(socket: Socket, dgram: String) -> Result<(), String> {
+    debug!("[FRI] -- call to send_datagram()");
+
+    let now = std::time::Instant::now();
+
+    match socket.send_dgram_tx.0.blocking_send(dgram) {
         Ok(_) => {
             let elapsed_time = now.elapsed();
             debug!("elapsed_time: {:?}", elapsed_time);
@@ -310,6 +353,11 @@ fn reply_session_request(
 
 rustler::init!(
     "Elixir.Wtransport.Native",
-    [start_runtime, stop_runtime, reply_session_request,],
+    [
+        start_runtime,
+        stop_runtime,
+        reply_session_request,
+        send_datagram
+    ],
     load = load
 );

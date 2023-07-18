@@ -13,12 +13,12 @@ defmodule Wtransport.Runtime do
   def init(_init_arg) do
     host = "localhost"
     port = 4433
-    cert_chain = "/home/fri/mkcert/localhost+2.pem"
-    priv_key = "/home/fri/mkcert/localhost+2-key.pem"
+    certfile = "/home/fri/mkcert/localhost+2.pem"
+    keyfile = "/home/fri/mkcert/localhost+2-key.pem"
 
     IO.puts("[FRI] -- Wtransport.Runtime.init")
     IO.inspect(self())
-    {:ok, runtime} = Wtransport.Native.start_runtime(self(), host, port, cert_chain, priv_key)
+    {:ok, runtime} = Wtransport.Native.start_runtime(self(), host, port, certfile, keyfile)
     IO.puts("[FRI] -- runtime")
     IO.inspect(runtime)
 
@@ -63,11 +63,11 @@ defmodule Wtransport.Runtime do
   end
 
   @impl true
-  def handle_info({:session_request, %Wtransport.SessionRequest{} = request}, state) do
+  def handle_info({:session_request, %Wtransport.Socket{} = socket}, state) do
     IO.puts("[FRI] -- Wtransport.Runtime.handle_info :session_request")
 
     {:ok, _pid} =
-      DynamicSupervisor.start_child(Wtransport.DynamicSupervisor, {Wtransport.Handler, request})
+      DynamicSupervisor.start_child(Wtransport.DynamicSupervisor, {Wtransport.Handler, socket})
 
     {:noreply, state}
   end
