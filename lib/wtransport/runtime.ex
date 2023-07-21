@@ -1,10 +1,18 @@
 defmodule Wtransport.Runtime do
   use GenServer
 
+  @enforce_keys [:shutdown_tx, :pid_crashed_tx]
+  defstruct [:shutdown_tx, :pid_crashed_tx]
+
+
   # Client
 
   def start_link(_init_arg) do
     GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  end
+
+  def pid_crashed(pid) do
+    GenServer.cast(__MODULE__, {:pid_crashed, pid})
   end
 
   # Server (callbacks)
@@ -49,9 +57,10 @@ defmodule Wtransport.Runtime do
   end
 
   @impl true
-  def handle_cast({:push, element}, state) do
-    new_state = [element | state]
-    {:noreply, new_state}
+  def handle_cast({:pid_crashed, pid}, state) do
+    {:ok, {}} = Wtransport.Native.pid_crashed(state.runtime, pid)
+
+    {:noreply, state}
   end
 
   @impl true
@@ -67,7 +76,7 @@ defmodule Wtransport.Runtime do
     IO.puts("[FRI] -- Wtransport.Runtime.handle_info :session_request")
 
     {:ok, _pid} =
-      DynamicSupervisor.start_child(Wtransport.DynamicSupervisor, {Wtransport.Handler, socket})
+      DynamicSupervisor.start_child(Wtransport.DynamicSupervisor, {Wtransport.SocketHandler, socket})
 
     {:noreply, state}
   end

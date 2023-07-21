@@ -1,4 +1,4 @@
-defmodule Wtransport.Handler do
+defmodule Wtransport.SocketHandler do
   use GenServer, restart: :temporary
 
   # Client
@@ -11,7 +11,7 @@ defmodule Wtransport.Handler do
 
   @impl true
   def init(%Wtransport.Socket{} = socket) do
-    IO.puts("[FRI] -- Wtransport.Handler.init")
+    IO.puts("[FRI] -- Wtransport.SocketHandler.init")
     IO.inspect(socket)
 
     state = %{}
@@ -21,16 +21,18 @@ defmodule Wtransport.Handler do
 
   @impl true
   def terminate(reason, state) do
-    IO.puts("[FRI] -- Wtransport.Handler.terminate")
+    IO.puts("[FRI] -- Wtransport.SocketHandler.terminate")
     IO.inspect(reason)
     IO.inspect(state)
+
+    Wtransport.Runtime.pid_crashed(self())
 
     :ok
   end
 
   @impl true
   def handle_continue(:session_request, {%Wtransport.Socket{} = socket, state}) do
-    IO.puts("[FRI] -- Wtransport.Handler.handle_continue :session_request")
+    IO.puts("[FRI] -- Wtransport.SocketHandler.handle_continue :session_request")
 
     case handle_connection(socket, state) do
       {:continue, new_state} ->
@@ -39,7 +41,7 @@ defmodule Wtransport.Handler do
         {:noreply, {socket, new_state}}
 
       _ ->
-        IO.puts("[FRI] -- Terminating Wtransport.Handler")
+        IO.puts("[FRI] -- Terminating Wtransport.SocketHandler")
 
         {:ok, {}} = Wtransport.Native.reply_session_request(socket, :error, self())
 
@@ -48,14 +50,22 @@ defmodule Wtransport.Handler do
   end
 
   @impl true
+  def handle_info({:error, error}, {%Wtransport.Socket{} = socket, state}) do
+    IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :error")
+    IO.inspect(error)
+
+    {:stop, :normal, {socket, state}}
+  end
+
+  @impl true
   def handle_info({:datagram_received, dgram}, {%Wtransport.Socket{} = socket, state}) do
-    IO.puts("[FRI] -- Wtransport.Handler.handle_info :datagram_received")
+    IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :datagram_received")
 
     case handle_datagram(dgram, socket, state) do
       {:continue, new_state} -> {:noreply, {socket, new_state}}
 
       _ ->
-        IO.puts("[FRI] -- Terminating Wtransport.Handler")
+        IO.puts("[FRI] -- Terminating Wtransport.SocketHandler")
 
         # TODO -- Handle native side
 
@@ -68,12 +78,12 @@ defmodule Wtransport.Handler do
   # Functions to be overridden
 
   def handle_connection(%Wtransport.Socket{} = _socket, state) do
-    IO.puts("[FRI] -- Wtransport.Handler.handle_connection")
+    IO.puts("[FRI] -- Wtransport.SocketHandler.handle_connection")
     {:continue, state}
   end
 
   def handle_datagram(dgram, %Wtransport.Socket{} = socket, state) do
-    IO.puts("[FRI] -- Wtransport.Handler.handle_datagram")
+    IO.puts("[FRI] -- Wtransport.SocketHandler.handle_datagram")
 
     :ok = Wtransport.Socket.send_datagram(socket, "Reply from FRI: -- #{dgram} -- END FRI")
 

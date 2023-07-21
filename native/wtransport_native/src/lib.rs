@@ -10,7 +10,7 @@ use tracing::trace;
 use tracing::Instrument;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::EnvFilter;
-use wtransport::endpoint::IncomingSession;
+use wtransport::endpoint::{IncomingSession, SessionRequest};
 use wtransport::tls::Certificate;
 use wtransport::Endpoint;
 use wtransport::ServerConfig;
@@ -24,16 +24,16 @@ mod atoms {
     }
 }
 
-struct XRuntime(tokio::runtime::Runtime);
 struct XShutdownSender(tokio::sync::broadcast::Sender<()>);
+struct XCrashSender(tokio::sync::broadcast::Sender<LocalPid>);
 struct XSessionRequestSender(tokio::sync::mpsc::Sender<(Atom, LocalPid)>);
 struct XDatagramSender(tokio::sync::mpsc::Sender<String>);
 
 #[derive(NifStruct)]
-#[module = "Wtransport.NifRuntime"]
+#[module = "Wtransport.Runtime"]
 struct NifRuntime {
-    rt: ResourceArc<XRuntime>,
     shutdown_tx: ResourceArc<XShutdownSender>,
+    pid_crashed_tx: ResourceArc<XCrashSender>,
 }
 
 #[derive(NifStruct)]
@@ -50,8 +50,8 @@ fn load(env: Env, _term: Term) -> bool {
 
     debug!("load(term: {:?})", _term);
 
-    rustler::resource!(XRuntime, env);
     rustler::resource!(XShutdownSender, env);
+    rustler::resource!(XCrashSender, env);
     rustler::resource!(XSessionRequestSender, env);
     rustler::resource!(XDatagramSender, env);
 
@@ -60,7 +60,7 @@ fn load(env: Env, _term: Term) -> bool {
 
 fn init_logging() {
     let env_filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
+        .with_default_directive(LevelFilter::DEBUG.into())
         .from_env_lossy();
 
     tracing_subscriber::fmt()
@@ -92,7 +92,7 @@ fn start_runtime(
     match start_runtime_impl(pid, host, port, certfile, keyfile) {
         Ok(runtime) => {
             let elapsed_time = now.elapsed();
-            debug!("elapsed_time: {:?}", elapsed_time);
+            debug!("elapsed_time (start_runtime): {:?}", elapsed_time);
 
             Ok(runtime)
         }
@@ -112,6 +112,7 @@ fn start_runtime_impl(
 ) -> Result<NifRuntime, Box<dyn Error>> {
     let (tx, rx) = std::sync::mpsc::channel();
     let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let (pid_crashed_tx, _pid_crashed_rx) = tokio::sync::broadcast::channel(1);
 
     let mut addrs_iter = (host, port).to_socket_addrs()?;
 
@@ -127,17 +128,24 @@ fn start_runtime_impl(
         .keep_alive_interval(Some(Duration::from_secs(3)))
         .build();
 
-    let runtime = ResourceArc::new(XRuntime(
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?,
-    ));
-    let rt = ResourceArc::clone(&runtime);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
 
     let shutdown_tx2 = shutdown_tx.clone();
+    let pid_crashed_tx2 = pid_crashed_tx.clone();
     std::thread::spawn(move || {
-        runtime.0.block_on(async {
-            match server_loop(pid, config, tx.clone(), shutdown_tx2, shutdown_rx).await {
+        runtime.block_on(async {
+            match server_loop(
+                pid,
+                config,
+                tx.clone(),
+                shutdown_tx2,
+                shutdown_rx,
+                pid_crashed_tx2,
+            )
+            .await
+            {
                 Ok(()) => (),
                 Err(error) => {
                     let _ = tx.send(Err(error.to_string()));
@@ -149,8 +157,8 @@ fn start_runtime_impl(
     rx.recv()??;
 
     Ok(NifRuntime {
-        rt: rt,
         shutdown_tx: ResourceArc::new(XShutdownSender(shutdown_tx)),
+        pid_crashed_tx: ResourceArc::new(XCrashSender(pid_crashed_tx)),
     })
 }
 
@@ -160,6 +168,7 @@ async fn server_loop(
     tx: std::sync::mpsc::Sender<Result<(), String>>,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
 ) -> Result<(), Box<dyn Error>> {
     let server = Endpoint::server(config)?;
 
@@ -171,9 +180,9 @@ async fn server_loop(
         _ = async {
             for id in 0.. {
                 let incoming_session = server.accept().await;
-                debug!("[FRI] -- Connection received");
+                debug!("Connection accepted");
                 tokio::spawn(
-                    handle_connection(pid, shutdown_tx.subscribe(), incoming_session)
+                    handle_connection(pid, shutdown_tx.subscribe(), pid_crashed_tx.clone(), incoming_session)
                         .instrument(info_span!("Connection", id)),
                 );
             }
@@ -187,35 +196,27 @@ async fn server_loop(
 }
 
 async fn handle_connection(
-    pid: LocalPid,
+    runtime_pid: LocalPid,
     shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
     incoming_session: IncomingSession,
 ) {
-    match handle_connection_impl(pid, shutdown_rx, incoming_session).await {
-        Ok(()) => (),
+    let session_request = match incoming_session.await {
+        Ok(request) => request,
         Err(error) => {
             error!("{:?}", error);
+            return;
         }
-    }
-}
+    };
 
-async fn handle_connection_impl(
-    runtime_pid: LocalPid,
-    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-    incoming_session: IncomingSession,
-) -> Result<(), Box<dyn Error>> {
-    let mut buffer = vec![0; 65536].into_boxed_slice();
-
-    info!("Waiting for session request...");
-
-    let session_request = incoming_session.await?;
+    // TODO: Expose all the fields, not only authority and path
     let authority = session_request.authority().to_string();
     let path = session_request.path().to_string();
 
     info!("New session: Authority: '{}', Path: '{}'", authority, path);
 
     let (session_request_tx, mut session_request_rx) = tokio::sync::mpsc::channel(1);
-    let (send_dgram_tx, mut send_dgram_rx) = tokio::sync::mpsc::channel(1);
+    let (send_dgram_tx, send_dgram_rx) = tokio::sync::mpsc::channel(1);
 
     let mut msg_env = OwnedEnv::new();
     msg_env.send_and_clear(&runtime_pid, |env| {
@@ -231,9 +232,42 @@ async fn handle_connection_impl(
             .encode(env)
     });
 
-    let Some((result, pid)) = session_request_rx.recv().await else {
-        return Err("session_request_tx channel closed".into());
-    };
+    let (result, pid) = session_request_rx.recv().await.unwrap();
+
+    match handle_connection_impl(
+        shutdown_rx,
+        pid_crashed_tx,
+        session_request,
+        send_dgram_rx,
+        result,
+        pid,
+    )
+    .await
+    {
+        Ok(()) => (),
+        Err(error) => {
+            msg_env.send_and_clear(&pid, |env| (atoms::error(), error.to_string()).encode(env));
+            error!("{:?}", error);
+        }
+    }
+}
+
+async fn handle_connection_impl(
+    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
+    session_request: SessionRequest,
+    mut send_dgram_rx: tokio::sync::mpsc::Receiver<String>,
+    result: Atom,
+    pid: LocalPid,
+) -> Result<(), Box<dyn Error>> {
+    let mut buffer = vec![0; 65536].into_boxed_slice();
+    let mut msg_env = OwnedEnv::new();
+    let mut pid_crashed_rx = pid_crashed_tx.subscribe();
+
+    // This is for the ugly hack for comparing 2 pids
+    let pid_repr = format!("{:?}", pid.as_c_arg());
+
+    info!("Waiting for session request...");
 
     if result != atoms::ok() {
         info!("Session request refused");
@@ -295,6 +329,15 @@ async fn handle_connection_impl(
             Some(dgram) = send_dgram_rx.recv() => {
                 connection.send_datagram(dgram)?;
             }
+            Ok(crashed_pid) = pid_crashed_rx.recv() => {
+                // Ugly hack for comparing 2 pids:
+                // The only way I found to compare 2 pids is to take advantage of the fact that
+                // the ErlNifPid type has the Debug trait, so I compare the debug representation of the pids
+                if format!("{:?}", crashed_pid.as_c_arg()) == pid_repr {
+                    info!("Handled pid crashed");
+                    return Ok(());
+                }
+            }
             _ = shutdown_rx.recv() => {
                 info!("Connection loop stopped");
                 return Ok(());
@@ -305,14 +348,30 @@ async fn handle_connection_impl(
 
 #[rustler::nif]
 fn stop_runtime(runtime: NifRuntime) -> Result<(), String> {
-    debug!("[FRI] -- call to stop_runtime()");
+    debug!("stop_runtime()");
 
     let now = std::time::Instant::now();
 
     match runtime.shutdown_tx.0.send(()) {
         Ok(_) => {
             let elapsed_time = now.elapsed();
-            debug!("elapsed_time: {:?}", elapsed_time);
+            debug!("elapsed_time (stop_runtime): {:?}", elapsed_time);
+            Ok(())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[rustler::nif]
+fn pid_crashed(runtime: NifRuntime, pid: LocalPid) -> Result<(), String> {
+    debug!("pid_crashed()");
+
+    let now = std::time::Instant::now();
+
+    match runtime.pid_crashed_tx.0.send(pid) {
+        Ok(_) => {
+            let elapsed_time = now.elapsed();
+            debug!("elapsed_time (pid_crashed): {:?}", elapsed_time);
             Ok(())
         }
         Err(error) => Err(error.to_string()),
@@ -321,14 +380,14 @@ fn stop_runtime(runtime: NifRuntime) -> Result<(), String> {
 
 #[rustler::nif]
 fn reply_session_request(socket: Socket, result: Atom, pid: LocalPid) -> Result<(), String> {
-    debug!("[FRI] -- call to reply_session_request()");
+    debug!("reply_session_request()");
 
     let now = std::time::Instant::now();
 
     match socket.session_request_tx.0.blocking_send((result, pid)) {
         Ok(_) => {
             let elapsed_time = now.elapsed();
-            debug!("elapsed_time: {:?}", elapsed_time);
+            debug!("elapsed_time (reply_session_request): {:?}", elapsed_time);
             Ok(())
         }
         Err(error) => Err(error.to_string()),
@@ -337,14 +396,14 @@ fn reply_session_request(socket: Socket, result: Atom, pid: LocalPid) -> Result<
 
 #[rustler::nif]
 fn send_datagram(socket: Socket, dgram: String) -> Result<(), String> {
-    debug!("[FRI] -- call to send_datagram()");
+    trace!("send_datagram()");
 
     let now = std::time::Instant::now();
 
     match socket.send_dgram_tx.0.blocking_send(dgram) {
         Ok(_) => {
             let elapsed_time = now.elapsed();
-            debug!("elapsed_time: {:?}", elapsed_time);
+            trace!("elapsed_time (send_datagram): {:?}", elapsed_time);
             Ok(())
         }
         Err(error) => Err(error.to_string()),
@@ -356,6 +415,7 @@ rustler::init!(
     [
         start_runtime,
         stop_runtime,
+        pid_crashed,
         reply_session_request,
         send_datagram
     ],
