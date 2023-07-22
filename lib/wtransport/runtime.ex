@@ -1,6 +1,8 @@
 defmodule Wtransport.Runtime do
   use GenServer
 
+  alias Wtransport.Socket
+
   @enforce_keys [:shutdown_tx, :pid_crashed_tx]
   defstruct [:shutdown_tx, :pid_crashed_tx]
 
@@ -58,7 +60,7 @@ defmodule Wtransport.Runtime do
 
   @impl true
   def handle_cast({:pid_crashed, pid}, state) do
-    {:ok, {}} = Wtransport.Native.pid_crashed(state.runtime, pid)
+    Wtransport.Native.pid_crashed(state.runtime, pid)
 
     {:noreply, state}
   end
@@ -72,7 +74,7 @@ defmodule Wtransport.Runtime do
   end
 
   @impl true
-  def handle_info({:session_request, %Wtransport.Socket{} = socket}, state) do
+  def handle_info({:session_request, %Socket{} = socket}, state) do
     IO.puts("[FRI] -- Wtransport.Runtime.handle_info :session_request")
 
     {:ok, _pid} =

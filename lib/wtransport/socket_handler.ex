@@ -1,16 +1,19 @@
 defmodule Wtransport.SocketHandler do
   use GenServer, restart: :temporary
 
+  alias Wtransport.Socket
+  alias Wtransport.Stream
+
   # Client
 
-  def start_link(%Wtransport.Socket{} = socket) do
+  def start_link(%Socket{} = socket) do
     GenServer.start_link(__MODULE__, socket)
   end
 
   # Server (callbacks)
 
   @impl true
-  def init(%Wtransport.Socket{} = socket) do
+  def init(%Socket{} = socket) do
     IO.puts("[FRI] -- Wtransport.SocketHandler.init")
     IO.inspect(socket)
 
@@ -31,7 +34,7 @@ defmodule Wtransport.SocketHandler do
   end
 
   @impl true
-  def handle_continue(:session_request, {%Wtransport.Socket{} = socket, state}) do
+  def handle_continue(:session_request, {%Socket{} = socket, state}) do
     IO.puts("[FRI] -- Wtransport.SocketHandler.handle_continue :session_request")
 
     case handle_connection(socket, state) do
@@ -50,7 +53,7 @@ defmodule Wtransport.SocketHandler do
   end
 
   @impl true
-  def handle_info({:error, error}, {%Wtransport.Socket{} = socket, state}) do
+  def handle_info({:error, error}, {%Socket{} = socket, state}) do
     IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :error")
     IO.inspect(error)
 
@@ -58,7 +61,7 @@ defmodule Wtransport.SocketHandler do
   end
 
   @impl true
-  def handle_info({:datagram_received, dgram}, {%Wtransport.Socket{} = socket, state}) do
+  def handle_info({:datagram_received, dgram}, {%Socket{} = socket, state}) do
     IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :datagram_received")
 
     case handle_datagram(dgram, socket, state) do
@@ -67,25 +70,33 @@ defmodule Wtransport.SocketHandler do
       _ ->
         IO.puts("[FRI] -- Terminating Wtransport.SocketHandler")
 
-        # TODO -- Handle native side
-
         {:stop, :normal, {socket, state}}
     end
 
     {:noreply, {socket, state}}
   end
 
+  @impl true
+  def handle_info({:accept_stream, %Stream{} = stream}, {%Socket{} = socket, state}) do
+    IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :accept_stream")
+
+    {:ok, _pid} =
+      DynamicSupervisor.start_child(Wtransport.DynamicSupervisor, {Wtransport.StreamHandler, {socket, stream}})
+
+    {:noreply, {socket, state}}
+  end
+
   # Functions to be overridden
 
-  def handle_connection(%Wtransport.Socket{} = _socket, state) do
+  def handle_connection(%Socket{} = _socket, state) do
     IO.puts("[FRI] -- Wtransport.SocketHandler.handle_connection")
     {:continue, state}
   end
 
-  def handle_datagram(dgram, %Wtransport.Socket{} = socket, state) do
+  def handle_datagram(dgram, %Socket{} = socket, state) do
     IO.puts("[FRI] -- Wtransport.SocketHandler.handle_datagram")
 
-    :ok = Wtransport.Socket.send_datagram(socket, "Reply from FRI: -- #{dgram} -- END FRI")
+    :ok = Socket.send_datagram(socket, "Reply from FRI: -- #{dgram} -- END FRI")
 
     {:continue, state}
   end

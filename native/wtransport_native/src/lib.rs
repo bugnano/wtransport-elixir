@@ -11,6 +11,7 @@ use tracing::Instrument;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use wtransport::endpoint::{IncomingSession, SessionRequest};
+use wtransport::stream::{RecvStream, SendStream};
 use wtransport::tls::Certificate;
 use wtransport::Endpoint;
 use wtransport::ServerConfig;
@@ -21,13 +22,17 @@ mod atoms {
         error,
         session_request,
         datagram_received,
+        accept_stream,
+        bi,
+        uni,
+        data_received,
     }
 }
 
 struct XShutdownSender(tokio::sync::broadcast::Sender<()>);
 struct XCrashSender(tokio::sync::broadcast::Sender<LocalPid>);
-struct XSessionRequestSender(tokio::sync::mpsc::Sender<(Atom, LocalPid)>);
-struct XDatagramSender(tokio::sync::mpsc::Sender<String>);
+struct XRequestSender(tokio::sync::mpsc::Sender<(Atom, LocalPid)>);
+struct XDataSender(tokio::sync::mpsc::Sender<String>);
 
 #[derive(NifStruct)]
 #[module = "Wtransport.Runtime"]
@@ -41,8 +46,16 @@ struct NifRuntime {
 struct Socket {
     authority: String,
     path: String,
-    session_request_tx: ResourceArc<XSessionRequestSender>,
-    send_dgram_tx: ResourceArc<XDatagramSender>,
+    session_request_tx: ResourceArc<XRequestSender>,
+    send_dgram_tx: ResourceArc<XDataSender>,
+}
+
+#[derive(NifStruct)]
+#[module = "Wtransport.Stream"]
+struct Stream {
+    stream_type: Atom,
+    accept_stream_tx: ResourceArc<XRequestSender>,
+    write_all_tx: Option<ResourceArc<XDataSender>>,
 }
 
 fn load(env: Env, _term: Term) -> bool {
@@ -52,8 +65,8 @@ fn load(env: Env, _term: Term) -> bool {
 
     rustler::resource!(XShutdownSender, env);
     rustler::resource!(XCrashSender, env);
-    rustler::resource!(XSessionRequestSender, env);
-    rustler::resource!(XDatagramSender, env);
+    rustler::resource!(XRequestSender, env);
+    rustler::resource!(XDataSender, env);
 
     true
 }
@@ -182,7 +195,7 @@ async fn server_loop(
                 let incoming_session = server.accept().await;
                 debug!("Connection accepted");
                 tokio::spawn(
-                    handle_connection(pid, shutdown_tx.subscribe(), pid_crashed_tx.clone(), incoming_session)
+                    handle_connection(pid, shutdown_tx.clone(), pid_crashed_tx.clone(), incoming_session)
                         .instrument(info_span!("Connection", id)),
                 );
             }
@@ -197,7 +210,7 @@ async fn server_loop(
 
 async fn handle_connection(
     runtime_pid: LocalPid,
-    shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    shutdown_tx: tokio::sync::broadcast::Sender<()>,
     pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
     incoming_session: IncomingSession,
 ) {
@@ -225,8 +238,8 @@ async fn handle_connection(
             Socket {
                 authority: authority,
                 path: path,
-                session_request_tx: ResourceArc::new(XSessionRequestSender(session_request_tx)),
-                send_dgram_tx: ResourceArc::new(XDatagramSender(send_dgram_tx)),
+                session_request_tx: ResourceArc::new(XRequestSender(session_request_tx)),
+                send_dgram_tx: ResourceArc::new(XDataSender(send_dgram_tx)),
             },
         )
             .encode(env)
@@ -235,7 +248,7 @@ async fn handle_connection(
     let (result, pid) = session_request_rx.recv().await.unwrap();
 
     match handle_connection_impl(
-        shutdown_rx,
+        shutdown_tx,
         pid_crashed_tx,
         session_request,
         send_dgram_rx,
@@ -253,16 +266,17 @@ async fn handle_connection(
 }
 
 async fn handle_connection_impl(
-    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    shutdown_tx: tokio::sync::broadcast::Sender<()>,
     pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
     session_request: SessionRequest,
     mut send_dgram_rx: tokio::sync::mpsc::Receiver<String>,
     result: Atom,
     pid: LocalPid,
 ) -> Result<(), Box<dyn Error>> {
-    let mut buffer = vec![0; 65536].into_boxed_slice();
     let mut msg_env = OwnedEnv::new();
+    let mut shutdown_rx = shutdown_tx.subscribe();
     let mut pid_crashed_rx = pid_crashed_tx.subscribe();
+    let mut id = 0;
 
     // This is for the ugly hack for comparing 2 pids
     let pid_repr = format!("{:?}", pid.as_c_arg());
@@ -282,35 +296,36 @@ async fn handle_connection_impl(
     loop {
         tokio::select! {
             stream = connection.accept_bi() => {
-                let mut stream = stream?;
+                let (send_stream, recv_stream) = stream?;
                 info!("Accepted BI stream");
 
-                let bytes_read = match stream.1.read(&mut buffer).await? {
-                    Some(bytes_read) => bytes_read,
-                    None => continue,
-                };
-
-                let str_data = std::str::from_utf8(&buffer[..bytes_read])?;
-
-                info!("Received (bi) '{str_data}' from client");
-
-                stream.0.write_all(b"ACK").await?;
+                tokio::spawn(
+                    handle_stream(
+                        pid,
+                        shutdown_tx.clone(),
+                        pid_crashed_tx.clone(),
+                        Some(send_stream),
+                        recv_stream,
+                    )
+                    .instrument(info_span!("Stream (bi)", id)),
+                );
+                id += 1;
             }
             stream = connection.accept_uni() => {
-                let mut stream = stream?;
+                let stream = stream?;
                 info!("Accepted UNI stream");
 
-                let bytes_read = match stream.read(&mut buffer).await? {
-                    Some(bytes_read) => bytes_read,
-                    None => continue,
-                };
-
-                let str_data = std::str::from_utf8(&buffer[..bytes_read])?;
-
-                info!("Received (uni) '{str_data}' from client");
-
-                let mut stream = connection.open_uni().await?.await?;
-                stream.write_all(b"ACK").await?;
+                tokio::spawn(
+                    handle_stream(
+                        pid,
+                        shutdown_tx.clone(),
+                        pid_crashed_tx.clone(),
+                        None,
+                        stream,
+                    )
+                    .instrument(info_span!("Stream (uni)", id)),
+                );
+                id += 1;
             }
             dgram = connection.receive_datagram() => {
                 let dgram = dgram?;
@@ -346,6 +361,118 @@ async fn handle_connection_impl(
     }
 }
 
+async fn handle_stream(
+    socket_pid: LocalPid,
+    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
+    send_stream: Option<SendStream>,
+    recv_stream: RecvStream,
+) {
+    let (accept_stream_tx, mut accept_stream_rx) = tokio::sync::mpsc::channel(1);
+    let (write_all_tx, write_all_rx) = tokio::sync::mpsc::channel(1);
+
+    let mut msg_env = OwnedEnv::new();
+    msg_env.send_and_clear(&socket_pid, |env| {
+        (
+            atoms::accept_stream(),
+            match send_stream {
+                Some(_) => Stream {
+                    stream_type: atoms::bi(),
+                    accept_stream_tx: ResourceArc::new(XRequestSender(accept_stream_tx)),
+                    write_all_tx: Some(ResourceArc::new(XDataSender(write_all_tx))),
+                },
+                None => Stream {
+                    stream_type: atoms::uni(),
+                    accept_stream_tx: ResourceArc::new(XRequestSender(accept_stream_tx)),
+                    write_all_tx: None,
+                },
+            },
+        )
+            .encode(env)
+    });
+
+    let (result, pid) = accept_stream_rx.recv().await.unwrap();
+
+    match handle_stream_impl(
+        shutdown_tx,
+        pid_crashed_tx,
+        send_stream,
+        recv_stream,
+        write_all_rx,
+        result,
+        pid,
+    )
+    .await
+    {
+        Ok(()) => (),
+        Err(error) => {
+            msg_env.send_and_clear(&pid, |env| (atoms::error(), error.to_string()).encode(env));
+            error!("{:?}", error);
+        }
+    }
+}
+
+async fn handle_stream_impl(
+    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
+    mut send_stream: Option<SendStream>,
+    mut recv_stream: RecvStream,
+    mut write_all_rx: tokio::sync::mpsc::Receiver<String>,
+    result: Atom,
+    pid: LocalPid,
+) -> Result<(), Box<dyn Error>> {
+    let mut buffer = vec![0; 65536].into_boxed_slice();
+    let mut msg_env = OwnedEnv::new();
+    let mut shutdown_rx = shutdown_tx.subscribe();
+    let mut pid_crashed_rx = pid_crashed_tx.subscribe();
+
+    // This is for the ugly hack for comparing 2 pids
+    let pid_repr = format!("{:?}", pid.as_c_arg());
+
+    if result != atoms::ok() {
+        info!("Stream refused");
+        return Ok(());
+    }
+
+    loop {
+        tokio::select! {
+            bytes_read = recv_stream.read(&mut buffer) => {
+                if let Some(bytes_read) = bytes_read? {
+                    let str_data = std::str::from_utf8(&buffer[..bytes_read])?;
+
+                    msg_env.send_and_clear(&pid, |env| {
+                        (
+                            atoms::data_received(),
+                            str_data,
+                        )
+                            .encode(env)
+                    });
+
+                    trace!("Received (bi) '{str_data}' from client");
+                }
+            }
+            Some(data) = write_all_rx.recv() => {
+                if let Some(stream) = send_stream.as_mut() {
+                    stream.write_all(data.as_bytes()).await?;
+                }
+            }
+            Ok(crashed_pid) = pid_crashed_rx.recv() => {
+                // Ugly hack for comparing 2 pids:
+                // The only way I found to compare 2 pids is to take advantage of the fact that
+                // the ErlNifPid type has the Debug trait, so I compare the debug representation of the pids
+                if format!("{:?}", crashed_pid.as_c_arg()) == pid_repr {
+                    info!("Handled pid crashed");
+                    return Ok(());
+                }
+            }
+            _ = shutdown_rx.recv() => {
+                info!("Stream loop stopped");
+                return Ok(());
+            }
+        }
+    }
+}
+
 #[rustler::nif]
 fn stop_runtime(runtime: NifRuntime) -> Result<(), String> {
     debug!("stop_runtime()");
@@ -374,7 +501,10 @@ fn pid_crashed(runtime: NifRuntime, pid: LocalPid) -> Result<(), String> {
             debug!("elapsed_time (pid_crashed): {:?}", elapsed_time);
             Ok(())
         }
-        Err(error) => Err(error.to_string()),
+        Err(error) => {
+            debug!("error (pid_crashed): {:?}", error.to_string());
+            Err(error.to_string())
+        }
     }
 }
 
@@ -410,6 +540,41 @@ fn send_datagram(socket: Socket, dgram: String) -> Result<(), String> {
     }
 }
 
+#[rustler::nif]
+fn reply_accept_stream(stream: Stream, result: Atom, pid: LocalPid) -> Result<(), String> {
+    debug!("reply_accept_stream()");
+
+    let now = std::time::Instant::now();
+
+    match stream.accept_stream_tx.0.blocking_send((result, pid)) {
+        Ok(_) => {
+            let elapsed_time = now.elapsed();
+            debug!("elapsed_time (reply_accept_stream): {:?}", elapsed_time);
+            Ok(())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[rustler::nif]
+fn write_all(stream: Stream, data: String) -> Result<(), String> {
+    trace!("write_all()");
+
+    let now = std::time::Instant::now();
+
+    match stream.write_all_tx {
+        Some(stream) => match stream.0.blocking_send(data) {
+            Ok(_) => {
+                let elapsed_time = now.elapsed();
+                trace!("elapsed_time (write_all): {:?}", elapsed_time);
+                Ok(())
+            }
+            Err(error) => Err(error.to_string()),
+        },
+        None => Err("Cannot send data to receive-only stream".to_string()),
+    }
+}
+
 rustler::init!(
     "Elixir.Wtransport.Native",
     [
@@ -417,7 +582,9 @@ rustler::init!(
         stop_runtime,
         pid_crashed,
         reply_session_request,
-        send_datagram
+        send_datagram,
+        reply_accept_stream,
+        write_all,
     ],
     load = load
 );
