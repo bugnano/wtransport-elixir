@@ -1,9 +1,9 @@
-defmodule Wtransport.MixProject do
+defmodule WtransportEcho.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :wtransport,
+      app: :wtransport_echo,
       version: "0.1.0",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
@@ -14,7 +14,8 @@ defmodule Wtransport.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger, :observer, :wx, :runtime_tools],
+      mod: {WtransportEcho.Application, []}
     ]
   end
 
@@ -23,7 +24,7 @@ defmodule Wtransport.MixProject do
     [
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
-      {:rustler, "~> 0.29.1"}
+      {:wtransport, path: "../.."}
     ]
   end
 end

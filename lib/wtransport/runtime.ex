@@ -6,11 +6,10 @@ defmodule Wtransport.Runtime do
   @enforce_keys [:shutdown_tx, :pid_crashed_tx]
   defstruct [:shutdown_tx, :pid_crashed_tx]
 
-
   # Client
 
-  def start_link(_init_arg) do
-    GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  def start_link(init_arg) do
+    GenServer.start_link(__MODULE__, init_arg, name: __MODULE__)
   end
 
   def pid_crashed(pid) do
@@ -20,11 +19,12 @@ defmodule Wtransport.Runtime do
   # Server (callbacks)
 
   @impl true
-  def init(_init_arg) do
-    host = "localhost"
-    port = 4433
-    certfile = "/home/fri/mkcert/localhost+2.pem"
-    keyfile = "/home/fri/mkcert/localhost+2-key.pem"
+  def init(init_arg) do
+    host = Keyword.fetch!(init_arg, :host)
+    port = Keyword.fetch!(init_arg, :port)
+    certfile = Keyword.fetch!(init_arg, :certfile)
+    keyfile = Keyword.fetch!(init_arg, :keyfile)
+    socket_handler = Keyword.fetch!(init_arg, :socket_handler)
 
     IO.puts("[FRI] -- Wtransport.Runtime.init")
     IO.inspect(self())
@@ -33,7 +33,8 @@ defmodule Wtransport.Runtime do
     IO.inspect(runtime)
 
     initial_state = %{
-      runtime: runtime
+      runtime: runtime,
+      socket_handler: socket_handler
     }
 
     # Process.send_after(self(), :stop_runtime, 2500)
@@ -78,7 +79,7 @@ defmodule Wtransport.Runtime do
     IO.puts("[FRI] -- Wtransport.Runtime.handle_info :session_request")
 
     {:ok, _pid} =
-      DynamicSupervisor.start_child(Wtransport.DynamicSupervisor, {Wtransport.SocketHandler, socket})
+      DynamicSupervisor.start_child(Wtransport.DynamicSupervisor, {state.socket_handler, socket})
 
     {:noreply, state}
   end
