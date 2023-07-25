@@ -25,6 +25,7 @@ defmodule Wtransport.Runtime do
     certfile = Keyword.fetch!(init_arg, :certfile)
     keyfile = Keyword.fetch!(init_arg, :keyfile)
     socket_handler = Keyword.fetch!(init_arg, :socket_handler)
+    stream_handler = Keyword.fetch!(init_arg, :stream_handler)
 
     IO.puts("[FRI] -- Wtransport.Runtime.init")
     IO.inspect(self())
@@ -34,7 +35,8 @@ defmodule Wtransport.Runtime do
 
     initial_state = %{
       runtime: runtime,
-      socket_handler: socket_handler
+      socket_handler: socket_handler,
+      stream_handler: stream_handler
     }
 
     # Process.send_after(self(), :stop_runtime, 2500)
@@ -79,7 +81,10 @@ defmodule Wtransport.Runtime do
     IO.puts("[FRI] -- Wtransport.Runtime.handle_info :session_request")
 
     {:ok, _pid} =
-      DynamicSupervisor.start_child(Wtransport.DynamicSupervisor, {state.socket_handler, socket})
+      DynamicSupervisor.start_child(
+        Wtransport.DynamicSupervisor,
+        {state.socket_handler, {socket, state.stream_handler}}
+      )
 
     {:noreply, state}
   end
