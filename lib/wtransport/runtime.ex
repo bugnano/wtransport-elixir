@@ -39,8 +39,6 @@ defmodule Wtransport.Runtime do
       stream_handler: stream_handler
     }
 
-    # Process.send_after(self(), :stop_runtime, 2500)
-
     {:ok, initial_state}
   end
 
@@ -65,14 +63,6 @@ defmodule Wtransport.Runtime do
   def handle_cast({:pid_crashed, pid}, state) do
     Wtransport.Native.pid_crashed(state.runtime, pid)
 
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_info(:stop_runtime, state) do
-    IO.puts("[FRI] -- Wtransport.Runtime.handle_info :stop_runtime")
-    {:ok, {}} = Wtransport.Native.stop_runtime(state.runtime)
-    IO.puts("[FRI] -- After Wtransport.Runtime.handle_info :stop_runtime")
     {:noreply, state}
   end
 
