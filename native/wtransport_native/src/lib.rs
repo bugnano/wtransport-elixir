@@ -22,10 +22,12 @@ mod atoms {
         error,
         session_request,
         datagram_received,
+        conn_closed,
         accept_stream,
         bi,
         uni,
         data_received,
+        stream_closed,
     }
 }
 
@@ -341,6 +343,13 @@ async fn handle_connection_impl(
 
                 trace!("Received (dgram) '{str_data}' from client");
             }
+            _ = connection.closed() => {
+                msg_env.send_and_clear(&pid, |env| atoms::conn_closed().encode(env));
+
+                debug!("Connection closed");
+
+                return Ok(());
+            }
             Some(dgram) = send_dgram_rx.recv() => {
                 connection.send_datagram(dgram)?;
             }
@@ -425,6 +434,7 @@ async fn handle_stream_impl(
     let mut msg_env = OwnedEnv::new();
     let mut shutdown_rx = shutdown_tx.subscribe();
     let mut pid_crashed_rx = pid_crashed_tx.subscribe();
+    let mut recv_stream_open = true;
 
     // This is for the ugly hack for comparing 2 pids
     let pid_repr = format!("{:?}", pid.as_c_arg());
@@ -436,7 +446,7 @@ async fn handle_stream_impl(
 
     loop {
         tokio::select! {
-            bytes_read = recv_stream.read(&mut buffer) => {
+            bytes_read = recv_stream.read(&mut buffer), if recv_stream_open => {
                 if let Some(bytes_read) = bytes_read? {
                     let str_data = std::str::from_utf8(&buffer[..bytes_read])?;
 
@@ -449,6 +459,12 @@ async fn handle_stream_impl(
                     });
 
                     trace!("Received (bi) '{str_data}' from client");
+                } else {
+                    recv_stream_open = false;
+
+                    msg_env.send_and_clear(&pid, |env| atoms::stream_closed().encode(env));
+
+                    debug!("Receiving end of stream closed");
                 }
             }
             Some(data) = write_all_rx.recv() => {

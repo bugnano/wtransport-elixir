@@ -10,6 +10,14 @@ defmodule Wtransport.SocketHandler do
               state :: term()
             ) :: term()
 
+  @callback handle_close(socket :: Socket.t(), state :: term()) :: term()
+
+  @callback handle_error(
+              reason :: String.t(),
+              socket :: Socket.t(),
+              state :: term()
+            ) :: term()
+
   defmacro __using__(_opts) do
     quote do
       @behaviour Wtransport.SocketHandler
@@ -19,6 +27,10 @@ defmodule Wtransport.SocketHandler do
       def handle_connection(%Socket{} = _socket, state), do: {:continue, state}
 
       def handle_datagram(_dgram, %Socket{} = _socket, state), do: {:continue, state}
+
+      def handle_close(%Socket{} = _socket, _state), do: :ok
+
+      def handle_error(_reason, %Socket{} = _socket, _state), do: :ok
 
       defoverridable Wtransport.SocketHandler
 
@@ -77,6 +89,8 @@ defmodule Wtransport.SocketHandler do
         IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :error")
         IO.inspect(error)
 
+        handle_error(error, socket, state)
+
         {:stop, :normal, {socket, stream_handler, state}}
       end
 
@@ -93,12 +107,13 @@ defmodule Wtransport.SocketHandler do
 
             {:stop, :normal, {socket, stream_handler, state}}
         end
-
-        {:noreply, {socket, stream_handler, state}}
       end
 
       @impl true
-      def handle_info({:accept_stream, %Stream{} = stream}, {%Socket{} = socket, stream_handler, state}) do
+      def handle_info(
+            {:accept_stream, %Stream{} = stream},
+            {%Socket{} = socket, stream_handler, state}
+          ) do
         IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :accept_stream")
 
         {:ok, _pid} =
@@ -108,6 +123,15 @@ defmodule Wtransport.SocketHandler do
           )
 
         {:noreply, {socket, stream_handler, state}}
+      end
+
+      @impl true
+      def handle_info(:conn_closed, {%Socket{} = socket, stream_handler, state}) do
+        IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :conn_closed")
+
+        handle_close(socket, state)
+
+        {:stop, :normal, {socket, stream_handler, state}}
       end
     end
   end

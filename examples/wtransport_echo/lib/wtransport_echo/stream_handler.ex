@@ -18,4 +18,22 @@ defmodule WtransportEcho.StreamHandler do
 
     {:continue, state}
   end
+
+  @impl Wtransport.StreamHandler
+  def handle_close(%Socket{} = _socket, %Stream{} = stream, state) do
+    IO.puts("[FRI] -- WtransportEcho.StreamHandler.handle_close")
+
+    case stream.stream_type do
+      :bi -> {:continue, state}
+      :uni -> :close
+    end
+  end
+
+  @impl Wtransport.StreamHandler
+  def handle_error(reason, %Socket{} = _socket, %Stream{} = _stream, _state) do
+    IO.puts("[FRI] -- WtransportEcho.StreamHandler.handle_error")
+    IO.puts(reason)
+
+    :ok
+  end
 end

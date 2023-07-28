@@ -11,6 +11,15 @@ defmodule Wtransport.StreamHandler do
               state :: term()
             ) :: term()
 
+  @callback handle_close(socket :: Socket.t(), stream :: Stream.t(), state :: term()) :: term()
+
+  @callback handle_error(
+              reason :: String.t(),
+              socket :: Socket.t(),
+              stream :: Stream.t(),
+              state :: term()
+            ) :: term()
+
   defmacro __using__(_opts) do
     quote do
       @behaviour Wtransport.StreamHandler
@@ -21,6 +30,10 @@ defmodule Wtransport.StreamHandler do
 
       def handle_data(_data, %Socket{} = _socket, %Stream{} = _stream, state),
         do: {:continue, state}
+
+      def handle_close(%Socket{} = _socket, %Stream{} = _stream, _state), do: :close
+
+      def handle_error(_reason, %Socket{} = _socket, %Stream{} = _stream, _state), do: :ok
 
       defoverridable Wtransport.StreamHandler
 
@@ -80,6 +93,8 @@ defmodule Wtransport.StreamHandler do
         IO.puts("[FRI] -- Wtransport.StreamHandler.handle_info :error")
         IO.inspect(error)
 
+        handle_error(error, socket, stream, state)
+
         {:stop, :normal, {socket, stream, state}}
       end
 
@@ -96,8 +111,22 @@ defmodule Wtransport.StreamHandler do
 
             {:stop, :normal, {socket, stream, state}}
         end
+      end
 
-        {:noreply, {socket, stream, state}}
+      @impl true
+
+      def handle_info(:stream_closed, {%Socket{} = socket, %Stream{} = stream, state}) do
+        IO.puts("[FRI] -- Wtransport.StreamHandler.handle_info :stream_closed")
+
+        case handle_close(socket, stream, state) do
+          {:continue, new_state} ->
+            {:noreply, {socket, stream, new_state}}
+
+          _ ->
+            IO.puts("[FRI] -- Terminating Wtransport.StreamHandler")
+
+            {:stop, :normal, {socket, stream, state}}
+        end
       end
     end
   end
