@@ -1,8 +1,8 @@
 defmodule Wtransport.SocketHandler do
   alias Wtransport.SessionRequest
   alias Wtransport.Socket
-  alias Wtransport.Connection
-  alias Wtransport.Stream
+  alias Wtransport.ConnectionRequest
+  alias Wtransport.StreamRequest
 
   @callback handle_session(socket :: Socket.t()) :: term()
 
@@ -96,24 +96,26 @@ defmodule Wtransport.SocketHandler do
 
       @impl true
       def handle_info(
-            {:connection, %Connection{} = connection},
+            {:connection_request, %ConnectionRequest{} = request},
             {%Socket{} = socket, stream_handler, state}
           ) do
-        IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :connection")
+        IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :connection_request")
 
-        socket = struct(socket, Map.from_struct(connection))
+        socket = struct(socket, Map.from_struct(request))
         IO.inspect(socket)
 
         case handle_connection(socket, state) do
           {:continue, new_state} ->
-            {:ok, {}} = Wtransport.Native.reply_request(connection.connection_tx, :ok, self())
+            {:ok, {}} =
+              Wtransport.Native.reply_request(request.connection_request_tx, :ok, self())
 
             {:noreply, {socket, stream_handler, new_state}}
 
           _ ->
             IO.puts("[FRI] -- Terminating Wtransport.SocketHandler")
 
-            {:ok, {}} = Wtransport.Native.reply_request(connection.connection_tx, :error, self())
+            {:ok, {}} =
+              Wtransport.Native.reply_request(request.connection_request_tx, :error, self())
 
             {:stop, :normal, {socket, stream_handler, state}}
         end
@@ -146,15 +148,15 @@ defmodule Wtransport.SocketHandler do
 
       @impl true
       def handle_info(
-            {:accept_stream, %Stream{} = stream},
+            {:stream_request, %StreamRequest{} = request},
             {%Socket{} = socket, stream_handler, state}
           ) do
-        IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :accept_stream")
+        IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :stream_request")
 
         {:ok, _pid} =
           DynamicSupervisor.start_child(
             Wtransport.DynamicSupervisor,
-            {stream_handler, {socket, stream}}
+            {stream_handler, {socket, request, state}}
           )
 
         {:noreply, {socket, stream_handler, state}}

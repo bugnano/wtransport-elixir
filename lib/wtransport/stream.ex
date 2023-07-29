@@ -1,12 +1,7 @@
 defmodule Wtransport.Stream do
-  @enforce_keys [
-    :stream_type,
-    :accept_stream_tx
-  ]
-
   defstruct [
     :stream_type,
-    :accept_stream_tx,
+    :socket,
     :write_all_tx
   ]
 

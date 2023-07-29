@@ -1,21 +1,20 @@
 defmodule Wtransport.StreamHandler do
   alias Wtransport.Socket
   alias Wtransport.Stream
+  alias Wtransport.StreamRequest
 
-  @callback handle_stream(socket :: Socket.t(), stream :: Stream.t(), state :: term()) :: term()
+  @callback handle_stream(stream :: Stream.t(), state :: term()) :: term()
 
   @callback handle_data(
               data :: String.t(),
-              socket :: Socket.t(),
               stream :: Stream.t(),
               state :: term()
             ) :: term()
 
-  @callback handle_close(socket :: Socket.t(), stream :: Stream.t(), state :: term()) :: term()
+  @callback handle_close(stream :: Stream.t(), state :: term()) :: term()
 
   @callback handle_error(
               reason :: String.t(),
-              socket :: Socket.t(),
               stream :: Stream.t(),
               state :: term()
             ) :: term()
@@ -26,14 +25,14 @@ defmodule Wtransport.StreamHandler do
 
       # Default behaviour
 
-      def handle_stream(%Socket{} = _socket, %Stream{} = _stream, state), do: {:continue, state}
+      def handle_stream(%Stream{} = _stream, state), do: {:continue, state}
 
-      def handle_data(_data, %Socket{} = _socket, %Stream{} = _stream, state),
+      def handle_data(_data, %Stream{} = _stream, state),
         do: {:continue, state}
 
-      def handle_close(%Socket{} = _socket, %Stream{} = _stream, _state), do: :close
+      def handle_close(%Stream{} = _stream, _state), do: :close
 
-      def handle_error(_reason, %Socket{} = _socket, %Stream{} = _stream, _state), do: :ok
+      def handle_error(_reason, %Stream{} = _stream, _state), do: :ok
 
       defoverridable Wtransport.StreamHandler
 
@@ -41,21 +40,20 @@ defmodule Wtransport.StreamHandler do
 
       # Client
 
-      def start_link({%Socket{} = socket, %Stream{} = stream}) do
-        GenServer.start_link(__MODULE__, {socket, stream})
+      def start_link({%Socket{} = socket, %StreamRequest{} = request, state}) do
+        GenServer.start_link(__MODULE__, {socket, request, state})
       end
 
       # Server (callbacks)
 
       @impl true
-      def init({%Socket{} = socket, %Stream{} = stream}) do
+      def init({%Socket{} = socket, %StreamRequest{} = request, state}) do
         IO.puts("[FRI] -- Wtransport.StreamHandler.init")
-        IO.inspect(socket)
+
+        stream = struct(%Stream{socket: socket}, Map.from_struct(request))
         IO.inspect(stream)
 
-        state = %{}
-
-        {:ok, {socket, stream, state}, {:continue, :accept_stream}}
+        {:ok, {stream, state, request}, {:continue, :stream_request}}
       end
 
       @impl true
@@ -70,62 +68,65 @@ defmodule Wtransport.StreamHandler do
       end
 
       @impl true
-      def handle_continue(:accept_stream, {%Socket{} = socket, %Stream{} = stream, state}) do
-        IO.puts("[FRI] -- Wtransport.StreamHandler.handle_continue :accept_stream")
+      def handle_continue(
+            :stream_request,
+            {%Stream{} = stream, state, %StreamRequest{} = request}
+          ) do
+        IO.puts("[FRI] -- Wtransport.StreamHandler.handle_continue :stream_request")
 
-        case handle_stream(socket, stream, state) do
+        case handle_stream(stream, state) do
           {:continue, new_state} ->
-            {:ok, {}} = Wtransport.Native.reply_request(stream.accept_stream_tx, :ok, self())
+            {:ok, {}} = Wtransport.Native.reply_request(request.stream_request_tx, :ok, self())
 
-            {:noreply, {socket, stream, new_state}}
+            {:noreply, {stream, new_state}}
 
           _ ->
             IO.puts("[FRI] -- Terminating Wtransport.StreamHandler")
 
-            {:ok, {}} = Wtransport.Native.reply_request(stream.accept_stream_tx, :error, self())
+            {:ok, {}} = Wtransport.Native.reply_request(request.stream_request_tx, :error, self())
 
-            {:stop, :normal, {socket, stream, state}}
+            {:stop, :normal, {stream, state}}
         end
       end
 
       @impl true
-      def handle_info({:error, error}, {%Socket{} = socket, %Stream{} = stream, state}) do
+      def handle_info({:error, error}, {%Stream{} = stream, state}) do
         IO.puts("[FRI] -- Wtransport.StreamHandler.handle_info :error")
         IO.inspect(error)
 
-        handle_error(error, socket, stream, state)
+        handle_error(error, stream, state)
 
-        {:stop, :normal, {socket, stream, state}}
+        {:stop, :normal, {stream, state}}
       end
 
       @impl true
-      def handle_info({:data_received, data}, {%Socket{} = socket, %Stream{} = stream, state}) do
+      def handle_info({:data_received, data}, {%Stream{} = stream, state}) do
         IO.puts("[FRI] -- Wtransport.StreamHandler.handle_info :data_received")
 
-        case handle_data(data, socket, stream, state) do
+        case handle_data(data, stream, state) do
           {:continue, new_state} ->
-            {:noreply, {socket, stream, new_state}}
+            {:noreply, {stream, new_state}}
 
           _ ->
             IO.puts("[FRI] -- Terminating Wtransport.StreamHandler")
 
-            {:stop, :normal, {socket, stream, state}}
+            {:stop, :normal, {stream, state}}
         end
       end
 
       @impl true
 
-      def handle_info(:stream_closed, {%Socket{} = socket, %Stream{} = stream, state}) do
+      def handle_info(:stream_closed, {%Stream{} = stream, state}) do
         IO.puts("[FRI] -- Wtransport.StreamHandler.handle_info :stream_closed")
 
-        case handle_close(socket, stream, state) do
+        case handle_close(stream, state) do
           {:continue, new_state} ->
-            {:noreply, {socket, stream, new_state}}
+            {:noreply, {stream, new_state}}
 
           _ ->
             IO.puts("[FRI] -- Terminating Wtransport.StreamHandler")
 
-            {:stop, :normal, {socket, stream, state}}
+            {:stop, :normal, {stream, state}}
         end
       end
     end

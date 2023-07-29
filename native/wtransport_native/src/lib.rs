@@ -21,10 +21,10 @@ mod atoms {
         ok,
         error,
         session_request,
-        connection,
+        connection_request,
         datagram_received,
         conn_closed,
-        accept_stream,
+        stream_request,
         bi,
         uni,
         data_received,
@@ -55,18 +55,18 @@ struct NifSessionRequest {
 }
 
 #[derive(NifStruct)]
-#[module = "Wtransport.Connection"]
-struct NifConnection {
+#[module = "Wtransport.ConnectionRequest"]
+struct NifConnectionRequest {
     stable_id: usize,
-    connection_tx: ResourceArc<XRequestSender>,
+    connection_request_tx: ResourceArc<XRequestSender>,
     send_dgram_tx: ResourceArc<XDataSender>,
 }
 
 #[derive(NifStruct)]
-#[module = "Wtransport.Stream"]
-struct Stream {
+#[module = "Wtransport.StreamRequest"]
+struct NifStreamRequest {
     stream_type: Atom,
-    accept_stream_tx: ResourceArc<XRequestSender>,
+    stream_request_tx: ResourceArc<XRequestSender>,
     write_all_tx: Option<ResourceArc<XDataSender>>,
 }
 
@@ -297,22 +297,22 @@ async fn handle_connection_impl(
 
     let connection = session_request.accept().await?;
 
-    let (connection_tx, mut connection_rx) = tokio::sync::mpsc::channel(1);
+    let (connection_request_tx, mut connection_request_rx) = tokio::sync::mpsc::channel(1);
     let (send_dgram_tx, mut send_dgram_rx) = tokio::sync::mpsc::channel(1);
 
     msg_env.send_and_clear(&pid, |env| {
         (
-            atoms::connection(),
-            NifConnection {
+            atoms::connection_request(),
+            NifConnectionRequest {
                 stable_id: connection.stable_id(),
-                connection_tx: ResourceArc::new(XRequestSender(connection_tx)),
+                connection_request_tx: ResourceArc::new(XRequestSender(connection_request_tx)),
                 send_dgram_tx: ResourceArc::new(XDataSender(send_dgram_tx)),
             },
         )
             .encode(env)
     });
 
-    let (result, _pid) = connection_rx.recv().await.unwrap();
+    let (result, _pid) = connection_request_rx.recv().await.unwrap();
 
     if result != atoms::ok() {
         info!("Connection refused");
@@ -403,22 +403,22 @@ async fn handle_stream(
     send_stream: Option<SendStream>,
     recv_stream: RecvStream,
 ) {
-    let (accept_stream_tx, mut accept_stream_rx) = tokio::sync::mpsc::channel(1);
+    let (stream_request_tx, mut stream_request_rx) = tokio::sync::mpsc::channel(1);
     let (write_all_tx, write_all_rx) = tokio::sync::mpsc::channel(1);
 
     let mut msg_env = OwnedEnv::new();
     msg_env.send_and_clear(&socket_pid, |env| {
         (
-            atoms::accept_stream(),
+            atoms::stream_request(),
             match send_stream {
-                Some(_) => Stream {
+                Some(_) => NifStreamRequest {
                     stream_type: atoms::bi(),
-                    accept_stream_tx: ResourceArc::new(XRequestSender(accept_stream_tx)),
+                    stream_request_tx: ResourceArc::new(XRequestSender(stream_request_tx)),
                     write_all_tx: Some(ResourceArc::new(XDataSender(write_all_tx))),
                 },
-                None => Stream {
+                None => NifStreamRequest {
                     stream_type: atoms::uni(),
-                    accept_stream_tx: ResourceArc::new(XRequestSender(accept_stream_tx)),
+                    stream_request_tx: ResourceArc::new(XRequestSender(stream_request_tx)),
                     write_all_tx: None,
                 },
             },
@@ -426,7 +426,7 @@ async fn handle_stream(
             .encode(env)
     });
 
-    let (result, pid) = accept_stream_rx.recv().await.unwrap();
+    let (result, pid) = stream_request_rx.recv().await.unwrap();
 
     match handle_stream_impl(
         shutdown_tx,
