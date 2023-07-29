@@ -4,6 +4,15 @@ defmodule WtransportEcho.SocketHandler do
   alias Wtransport.Socket
 
   @impl Wtransport.SocketHandler
+  def handle_session(%Socket{} = _socket) do
+    IO.puts("[FRI] -- WtransportEcho.SocketHandler.handle_session")
+
+    state = %{}
+
+    {:continue, state}
+  end
+
+  @impl Wtransport.SocketHandler
   def handle_connection(%Socket{} = _socket, state) do
     IO.puts("[FRI] -- WtransportEcho.SocketHandler.handle_connection")
     {:continue, state}

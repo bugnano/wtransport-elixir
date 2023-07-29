@@ -1,7 +1,7 @@
 defmodule Wtransport.Runtime do
   use GenServer
 
-  alias Wtransport.Socket
+  alias Wtransport.SessionRequest
 
   @enforce_keys [:shutdown_tx, :pid_crashed_tx]
   defstruct [:shutdown_tx, :pid_crashed_tx]
@@ -67,13 +67,13 @@ defmodule Wtransport.Runtime do
   end
 
   @impl true
-  def handle_info({:session_request, %Socket{} = socket}, state) do
+  def handle_info({:session_request, %SessionRequest{} = request}, state) do
     IO.puts("[FRI] -- Wtransport.Runtime.handle_info :session_request")
 
     {:ok, _pid} =
       DynamicSupervisor.start_child(
         Wtransport.DynamicSupervisor,
-        {state.socket_handler, {socket, state.stream_handler}}
+        {state.socket_handler, {request, state.stream_handler}}
       )
 
     {:noreply, state}

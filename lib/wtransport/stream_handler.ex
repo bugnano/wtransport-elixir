@@ -21,7 +21,7 @@ defmodule Wtransport.StreamHandler do
             ) :: term()
 
   defmacro __using__(_opts) do
-    quote do
+    quote location: :keep do
       @behaviour Wtransport.StreamHandler
 
       # Default behaviour
@@ -75,14 +75,14 @@ defmodule Wtransport.StreamHandler do
 
         case handle_stream(socket, stream, state) do
           {:continue, new_state} ->
-            {:ok, {}} = Wtransport.Native.reply_accept_stream(stream, :ok, self())
+            {:ok, {}} = Wtransport.Native.reply_request(stream.accept_stream_tx, :ok, self())
 
             {:noreply, {socket, stream, new_state}}
 
           _ ->
             IO.puts("[FRI] -- Terminating Wtransport.StreamHandler")
 
-            {:ok, {}} = Wtransport.Native.reply_accept_stream(stream, :error, self())
+            {:ok, {}} = Wtransport.Native.reply_request(stream.accept_stream_tx, :error, self())
 
             {:stop, :normal, {socket, stream, state}}
         end

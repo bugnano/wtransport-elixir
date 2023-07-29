@@ -1,6 +1,10 @@
 defmodule Wtransport.SocketHandler do
+  alias Wtransport.SessionRequest
   alias Wtransport.Socket
+  alias Wtransport.Connection
   alias Wtransport.Stream
+
+  @callback handle_session(socket :: Socket.t()) :: term()
 
   @callback handle_connection(socket :: Socket.t(), state :: term()) :: term()
 
@@ -19,10 +23,12 @@ defmodule Wtransport.SocketHandler do
             ) :: term()
 
   defmacro __using__(_opts) do
-    quote do
+    quote location: :keep do
       @behaviour Wtransport.SocketHandler
 
       # Default behaviour
+
+      def handle_session(%Socket{} = _socket), do: {:continue, %{}}
 
       def handle_connection(%Socket{} = _socket, state), do: {:continue, state}
 
@@ -38,20 +44,20 @@ defmodule Wtransport.SocketHandler do
 
       # Client
 
-      def start_link({%Socket{} = socket, stream_handler}) do
-        GenServer.start_link(__MODULE__, {socket, stream_handler})
+      def start_link({%SessionRequest{} = request, stream_handler}) do
+        GenServer.start_link(__MODULE__, {request, stream_handler})
       end
 
       # Server (callbacks)
 
       @impl true
-      def init({%Socket{} = socket, stream_handler}) do
+      def init({%SessionRequest{} = request, stream_handler}) do
         IO.puts("[FRI] -- Wtransport.SocketHandler.init")
+
+        socket = struct(%Socket{}, Map.from_struct(request))
         IO.inspect(socket)
 
-        state = %{}
-
-        {:ok, {socket, stream_handler, state}, {:continue, :session_request}}
+        {:ok, {socket, stream_handler, request}, {:continue, :session_request}}
       end
 
       @impl true
@@ -66,19 +72,48 @@ defmodule Wtransport.SocketHandler do
       end
 
       @impl true
-      def handle_continue(:session_request, {%Socket{} = socket, stream_handler, state}) do
+      def handle_continue(
+            :session_request,
+            {%Socket{} = socket, stream_handler, %SessionRequest{} = request}
+          ) do
         IO.puts("[FRI] -- Wtransport.SocketHandler.handle_continue :session_request")
 
-        case handle_connection(socket, state) do
+        case handle_session(socket) do
           {:continue, new_state} ->
-            {:ok, {}} = Wtransport.Native.reply_session_request(socket, :ok, self())
+            {:ok, {}} = Wtransport.Native.reply_request(request.session_request_tx, :ok, self())
 
             {:noreply, {socket, stream_handler, new_state}}
 
           _ ->
             IO.puts("[FRI] -- Terminating Wtransport.SocketHandler")
 
-            {:ok, {}} = Wtransport.Native.reply_session_request(socket, :error, self())
+            {:ok, {}} =
+              Wtransport.Native.reply_request(request.session_request_tx, :error, self())
+
+            {:stop, :normal, {socket, stream_handler, %{}}}
+        end
+      end
+
+      @impl true
+      def handle_info(
+            {:connection, %Connection{} = connection},
+            {%Socket{} = socket, stream_handler, state}
+          ) do
+        IO.puts("[FRI] -- Wtransport.SocketHandler.handle_info :connection")
+
+        socket = struct(socket, Map.from_struct(connection))
+        IO.inspect(socket)
+
+        case handle_connection(socket, state) do
+          {:continue, new_state} ->
+            {:ok, {}} = Wtransport.Native.reply_request(connection.connection_tx, :ok, self())
+
+            {:noreply, {socket, stream_handler, new_state}}
+
+          _ ->
+            IO.puts("[FRI] -- Terminating Wtransport.SocketHandler")
+
+            {:ok, {}} = Wtransport.Native.reply_request(connection.connection_tx, :error, self())
 
             {:stop, :normal, {socket, stream_handler, state}}
         end

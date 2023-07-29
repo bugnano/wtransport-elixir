@@ -21,6 +21,7 @@ mod atoms {
         ok,
         error,
         session_request,
+        connection,
         datagram_received,
         conn_closed,
         accept_stream,
@@ -44,11 +45,20 @@ struct NifRuntime {
 }
 
 #[derive(NifStruct)]
-#[module = "Wtransport.Socket"]
-struct Socket {
+#[module = "Wtransport.SessionRequest"]
+struct NifSessionRequest {
     authority: String,
     path: String,
+    origin: Option<String>,
+    user_agent: Option<String>,
     session_request_tx: ResourceArc<XRequestSender>,
+}
+
+#[derive(NifStruct)]
+#[module = "Wtransport.Connection"]
+struct NifConnection {
+    stable_id: usize,
+    connection_tx: ResourceArc<XRequestSender>,
     send_dgram_tx: ResourceArc<XDataSender>,
 }
 
@@ -224,24 +234,28 @@ async fn handle_connection(
         }
     };
 
-    // TODO: Expose all the fields, not only authority and path
+    // TODO: Expose all the fields (at the moment the headers are missing because the HashMap in the headers is a private field)
     let authority = session_request.authority().to_string();
     let path = session_request.path().to_string();
+    let origin = session_request.origin().map(|origin| origin.to_string());
+    let user_agent = session_request
+        .user_agent()
+        .map(|user_agent| user_agent.to_string());
 
     info!("New session: Authority: '{}', Path: '{}'", authority, path);
 
     let (session_request_tx, mut session_request_rx) = tokio::sync::mpsc::channel(1);
-    let (send_dgram_tx, send_dgram_rx) = tokio::sync::mpsc::channel(1);
 
     let mut msg_env = OwnedEnv::new();
     msg_env.send_and_clear(&runtime_pid, |env| {
         (
             atoms::session_request(),
-            Socket {
-                authority: authority,
-                path: path,
+            NifSessionRequest {
+                authority,
+                path,
+                origin,
+                user_agent,
                 session_request_tx: ResourceArc::new(XRequestSender(session_request_tx)),
-                send_dgram_tx: ResourceArc::new(XDataSender(send_dgram_tx)),
             },
         )
             .encode(env)
@@ -249,16 +263,7 @@ async fn handle_connection(
 
     let (result, pid) = session_request_rx.recv().await.unwrap();
 
-    match handle_connection_impl(
-        shutdown_tx,
-        pid_crashed_tx,
-        session_request,
-        send_dgram_rx,
-        result,
-        pid,
-    )
-    .await
-    {
+    match handle_connection_impl(shutdown_tx, pid_crashed_tx, session_request, result, pid).await {
         Ok(()) => (),
         Err(error) => {
             msg_env.send_and_clear(&pid, |env| (atoms::error(), error.to_string()).encode(env));
@@ -271,7 +276,6 @@ async fn handle_connection_impl(
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
     pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
     session_request: SessionRequest,
-    mut send_dgram_rx: tokio::sync::mpsc::Receiver<String>,
     result: Atom,
     pid: LocalPid,
 ) -> Result<(), Box<dyn Error>> {
@@ -292,6 +296,28 @@ async fn handle_connection_impl(
     }
 
     let connection = session_request.accept().await?;
+
+    let (connection_tx, mut connection_rx) = tokio::sync::mpsc::channel(1);
+    let (send_dgram_tx, mut send_dgram_rx) = tokio::sync::mpsc::channel(1);
+
+    msg_env.send_and_clear(&pid, |env| {
+        (
+            atoms::connection(),
+            NifConnection {
+                stable_id: connection.stable_id(),
+                connection_tx: ResourceArc::new(XRequestSender(connection_tx)),
+                send_dgram_tx: ResourceArc::new(XDataSender(send_dgram_tx)),
+            },
+        )
+            .encode(env)
+    });
+
+    let (result, _pid) = connection_rx.recv().await.unwrap();
+
+    if result != atoms::ok() {
+        info!("Connection refused");
+        return Ok(());
+    }
 
     info!("Waiting for data from client...");
 
@@ -525,15 +551,19 @@ fn pid_crashed(runtime: NifRuntime, pid: LocalPid) -> Result<(), String> {
 }
 
 #[rustler::nif]
-fn reply_session_request(socket: Socket, result: Atom, pid: LocalPid) -> Result<(), String> {
-    debug!("reply_session_request()");
+fn reply_request(
+    tx_channel: ResourceArc<XRequestSender>,
+    result: Atom,
+    pid: LocalPid,
+) -> Result<(), String> {
+    debug!("reply_request()");
 
     let now = std::time::Instant::now();
 
-    match socket.session_request_tx.0.blocking_send((result, pid)) {
+    match tx_channel.0.blocking_send((result, pid)) {
         Ok(_) => {
             let elapsed_time = now.elapsed();
-            debug!("elapsed_time (reply_session_request): {:?}", elapsed_time);
+            debug!("elapsed_time (reply_request): {:?}", elapsed_time);
             Ok(())
         }
         Err(error) => Err(error.to_string()),
@@ -541,53 +571,18 @@ fn reply_session_request(socket: Socket, result: Atom, pid: LocalPid) -> Result<
 }
 
 #[rustler::nif]
-fn send_datagram(socket: Socket, dgram: String) -> Result<(), String> {
-    trace!("send_datagram()");
+fn send_data(tx_channel: ResourceArc<XDataSender>, data: String) -> Result<(), String> {
+    trace!("send_data()");
 
     let now = std::time::Instant::now();
 
-    match socket.send_dgram_tx.0.blocking_send(dgram) {
+    match tx_channel.0.blocking_send(data) {
         Ok(_) => {
             let elapsed_time = now.elapsed();
-            trace!("elapsed_time (send_datagram): {:?}", elapsed_time);
+            trace!("elapsed_time (send_data): {:?}", elapsed_time);
             Ok(())
         }
         Err(error) => Err(error.to_string()),
-    }
-}
-
-#[rustler::nif]
-fn reply_accept_stream(stream: Stream, result: Atom, pid: LocalPid) -> Result<(), String> {
-    debug!("reply_accept_stream()");
-
-    let now = std::time::Instant::now();
-
-    match stream.accept_stream_tx.0.blocking_send((result, pid)) {
-        Ok(_) => {
-            let elapsed_time = now.elapsed();
-            debug!("elapsed_time (reply_accept_stream): {:?}", elapsed_time);
-            Ok(())
-        }
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-#[rustler::nif]
-fn write_all(stream: Stream, data: String) -> Result<(), String> {
-    trace!("write_all()");
-
-    let now = std::time::Instant::now();
-
-    match stream.write_all_tx {
-        Some(stream) => match stream.0.blocking_send(data) {
-            Ok(_) => {
-                let elapsed_time = now.elapsed();
-                trace!("elapsed_time (write_all): {:?}", elapsed_time);
-                Ok(())
-            }
-            Err(error) => Err(error.to_string()),
-        },
-        None => Err("Cannot send data to receive-only stream".to_string()),
     }
 }
 
@@ -597,10 +592,8 @@ rustler::init!(
         start_runtime,
         stop_runtime,
         pid_crashed,
-        reply_session_request,
-        send_datagram,
-        reply_accept_stream,
-        write_all,
+        reply_request,
+        send_data,
     ],
     load = load
 );
