@@ -5,9 +5,8 @@ defmodule WtransportEcho.ConnectionHandler do
   alias Wtransport.Connection
 
   @impl Wtransport.ConnectionHandler
-  def handle_session(%Session{} = session) do
+  def handle_session(%Session{} = _session) do
     IO.puts("[FRI] -- WtransportEcho.ConnectionHandler.handle_session")
-    IO.inspect(session)
 
     state = %{}
 
@@ -15,9 +14,9 @@ defmodule WtransportEcho.ConnectionHandler do
   end
 
   @impl Wtransport.ConnectionHandler
-  def handle_connection(%Connection{} = connection, state) do
+  def handle_connection(%Connection{} = _connection, state) do
     IO.puts("[FRI] -- WtransportEcho.ConnectionHandler.handle_connection")
-    IO.inspect(connection)
+
     {:continue, state}
   end
 

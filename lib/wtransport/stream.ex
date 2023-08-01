@@ -2,6 +2,7 @@ defmodule Wtransport.Stream do
   defstruct [
     :stream_type,
     :connection,
+    :request_tx,
     :write_all_tx
   ]
 

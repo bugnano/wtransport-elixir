@@ -4,9 +4,8 @@ defmodule WtransportEcho.StreamHandler do
   alias Wtransport.Stream
 
   @impl Wtransport.StreamHandler
-  def handle_stream(%Stream{} = stream, state) do
+  def handle_stream(%Stream{} = _stream, state) do
     IO.puts("[FRI] -- WtransportEcho.StreamHandler.handle_stream")
-    IO.inspect(stream)
 
     {:continue, state}
   end

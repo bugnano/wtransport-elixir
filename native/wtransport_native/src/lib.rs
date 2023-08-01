@@ -31,6 +31,7 @@ mod atoms {
         uni,
         data_received,
         stream_closed,
+        pid_crashed,
         remote_address,
         max_datagram_size,
         rtt,
@@ -231,6 +232,8 @@ async fn handle_connection(
     pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
     incoming_session: IncomingSession,
 ) {
+    info!("Waiting for session request...");
+
     let session_request = match incoming_session.await {
         Ok(request) => request,
         Err(error) => {
@@ -304,13 +307,13 @@ async fn handle_connection_impl(
     // This is for the ugly hack for comparing 2 pids
     let pid_repr = format!("{:?}", pid.as_c_arg());
 
-    info!("Waiting for session request...");
-
     if result != atoms::ok() {
         info!("Session request refused");
         session_request.not_found().await;
         return Ok(());
     }
+
+    debug!("Waiting for connection request...");
 
     let connection = session_request.accept().await?;
 
@@ -398,14 +401,17 @@ async fn handle_connection_impl(
                 connection.send_datagram(dgram)?;
             }
             Some(request) = request_rx.recv() => {
-                handle_request(&connection, request);
+                if let Some(false) = handle_request(&connection, request) {
+                    info!("Handled pid crashed (1)");
+                    return Ok(());
+                }
             }
             Ok(crashed_pid) = pid_crashed_rx.recv() => {
                 // Ugly hack for comparing 2 pids:
                 // The only way I found to compare 2 pids is to take advantage of the fact that
                 // the ErlNifPid type has the Debug trait, so I compare the debug representation of the pids
                 if format!("{:?}", crashed_pid.as_c_arg()) == pid_repr {
-                    info!("Handled pid crashed");
+                    info!("Handled pid crashed (2)");
                     return Ok(());
                 }
             }
@@ -423,6 +429,8 @@ fn handle_request(connection: &Connection, (request, pid): (Atom, LocalPid)) -> 
     if request == atoms::ok() {
         return Some(true);
     } else if request == atoms::error() {
+        return Some(false);
+    } else if request == atoms::pid_crashed() {
         return Some(false);
     } else if request == atoms::remote_address() {
         let remote_address = connection.remote_address();
@@ -487,6 +495,7 @@ async fn handle_stream(
         pid_crashed_tx,
         send_stream,
         recv_stream,
+        request_rx,
         write_all_rx,
         result,
         pid,
@@ -506,6 +515,7 @@ async fn handle_stream_impl(
     pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
     mut send_stream: Option<SendStream>,
     mut recv_stream: RecvStream,
+    mut request_rx: tokio::sync::mpsc::Receiver<(Atom, LocalPid)>,
     mut write_all_rx: tokio::sync::mpsc::Receiver<String>,
     result: Atom,
     pid: LocalPid,
@@ -538,7 +548,7 @@ async fn handle_stream_impl(
                             .encode(env)
                     });
 
-                    trace!("Received (bi) '{str_data}' from client");
+                    trace!("Received '{str_data}' from client");
                 } else {
                     recv_stream_open = false;
 
@@ -552,12 +562,18 @@ async fn handle_stream_impl(
                     stream.write_all(data.as_bytes()).await?;
                 }
             }
+            Some((request, _request_pid)) = request_rx.recv() => {
+                if request == atoms::pid_crashed() {
+                    info!("Handled pid crashed (1)");
+                    return Ok(());
+                }
+            }
             Ok(crashed_pid) = pid_crashed_rx.recv() => {
                 // Ugly hack for comparing 2 pids:
                 // The only way I found to compare 2 pids is to take advantage of the fact that
                 // the ErlNifPid type has the Debug trait, so I compare the debug representation of the pids
                 if format!("{:?}", crashed_pid.as_c_arg()) == pid_repr {
-                    info!("Handled pid crashed");
+                    info!("Handled pid crashed (2)");
                     return Ok(());
                 }
             }

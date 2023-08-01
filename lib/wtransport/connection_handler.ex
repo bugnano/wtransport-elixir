@@ -23,27 +23,63 @@ defmodule Wtransport.ConnectionHandler do
               state :: term()
             ) :: term()
 
+  @callback handle_continue(continue_arg :: term(), connection :: Connection.t(), state :: term()) ::
+              term()
+
+  @callback handle_info(msg :: term(), connection :: Connection.t(), state :: term()) :: term()
+
+  @callback handle_call(
+              request :: term(),
+              from :: term(),
+              connection :: Connection.t(),
+              state :: term()
+            ) :: term()
+
+  @callback handle_cast(request :: term(), connection :: Connection.t(), state :: term()) ::
+              term()
+
   defmacro __using__(_opts) do
     quote location: :keep do
-      require Logger
-
       @behaviour Wtransport.ConnectionHandler
 
       # Default behaviour
 
+      @impl Wtransport.ConnectionHandler
       def handle_session(%Session{} = _session), do: {:continue, %{}}
 
+      @impl Wtransport.ConnectionHandler
       def handle_connection(%Connection{} = _connection, state), do: {:continue, state}
 
+      @impl Wtransport.ConnectionHandler
       def handle_datagram(_dgram, %Connection{} = _connection, state), do: {:continue, state}
 
+      @impl Wtransport.ConnectionHandler
       def handle_close(%Connection{} = _connection, _state), do: :ok
 
+      @impl Wtransport.ConnectionHandler
       def handle_error(_reason, %Connection{} = _connection, _state), do: :ok
+
+      @impl Wtransport.ConnectionHandler
+      def handle_continue(_continue_arg, %Connection{} = _connection, _state),
+        do: raise("handle_continue/3 not implemented")
+
+      @impl Wtransport.ConnectionHandler
+      def handle_info(_msg, %Connection{} = _connection, _state),
+        do: raise("handle_info/3 not implemented")
+
+      @impl Wtransport.ConnectionHandler
+      def handle_call(_request, _from, %Connection{} = _connection, _state),
+        do: raise("handle_call/4 not implemented")
+
+      @impl Wtransport.ConnectionHandler
+      def handle_cast(_request, %Connection{} = _connection, _state),
+        do: raise("handle_cast/3 not implemented")
 
       defoverridable Wtransport.ConnectionHandler
 
       use GenServer, restart: :temporary
+
+      require Logger
 
       # Client
 
@@ -65,8 +101,23 @@ defmodule Wtransport.ConnectionHandler do
       end
 
       @impl true
+      def terminate(_reason, {%Connection{} = connection, stream_handler, _state}) do
+        if connection.request_tx != nil do
+          Logger.debug("Wtransport.ConnectionHandler.terminate (1)")
+
+          Wtransport.Native.reply_request(connection.request_tx, :pid_crashed, self())
+        else
+          Logger.debug("Wtransport.ConnectionHandler.terminate (2)")
+
+          Wtransport.Runtime.pid_crashed(self())
+        end
+
+        :ok
+      end
+
+      @impl true
       def terminate(_reason, _state) do
-        Logger.debug("Wtransport.ConnectionHandler.terminate")
+        Logger.debug("Wtransport.ConnectionHandler.terminate (3)")
 
         Wtransport.Runtime.pid_crashed(self())
 
@@ -93,6 +144,20 @@ defmodule Wtransport.ConnectionHandler do
               Wtransport.Native.reply_request(connection.request_tx, :error, self())
 
             {:stop, :normal, {connection, stream_handler, %{}}}
+        end
+      end
+
+      @impl true
+      def handle_continue(continue_arg, {%Connection{} = connection, stream_handler, state}) do
+        case handle_continue(continue_arg, connection, state) do
+          {:noreply, new_state} ->
+            {:noreply, {connection, stream_handler, new_state}}
+
+          {:noreply, new_state, arg} ->
+            {:noreply, {connection, stream_handler, new_state}, arg}
+
+          {:stop, reason, new_state} ->
+            {:stop, reason, {connection, stream_handler, new_state}}
         end
       end
 
@@ -172,6 +237,57 @@ defmodule Wtransport.ConnectionHandler do
         handle_close(connection, state)
 
         {:stop, :normal, {connection, stream_handler, state}}
+      end
+
+      @impl true
+      def handle_info(msg, {%Connection{} = connection, stream_handler, state}) do
+        case handle_info(msg, connection, state) do
+          {:noreply, new_state} ->
+            {:noreply, {connection, stream_handler, new_state}}
+
+          {:noreply, new_state, arg} ->
+            {:noreply, {connection, stream_handler, new_state}, arg}
+
+          {:stop, reason, new_state} ->
+            {:stop, reason, {connection, stream_handler, new_state}}
+        end
+      end
+
+      @impl true
+      def handle_call(request, from, {%Connection{} = connection, stream_handler, state}) do
+        case handle_call(request, from, connection, state) do
+          {:reply, reply, new_state} ->
+            {:reply, reply, {connection, stream_handler, new_state}}
+
+          {:reply, reply, new_state, arg} ->
+            {:reply, reply, {connection, stream_handler, new_state}, arg}
+
+          {:noreply, new_state} ->
+            {:noreply, {connection, stream_handler, new_state}}
+
+          {:noreply, new_state, arg} ->
+            {:noreply, {connection, stream_handler, new_state}, arg}
+
+          {:stop, reason, reply, new_state} ->
+            {:stop, reason, reply, {connection, stream_handler, new_state}}
+
+          {:stop, reason, new_state} ->
+            {:stop, reason, {connection, stream_handler, new_state}}
+        end
+      end
+
+      @impl true
+      def handle_cast(request, {%Connection{} = connection, stream_handler, state}) do
+        case handle_cast(request, connection, state) do
+          {:noreply, new_state} ->
+            {:noreply, {connection, stream_handler, new_state}}
+
+          {:noreply, new_state, arg} ->
+            {:noreply, {connection, stream_handler, new_state}, arg}
+
+          {:stop, reason, new_state} ->
+            {:stop, reason, {connection, stream_handler, new_state}}
+        end
       end
     end
   end

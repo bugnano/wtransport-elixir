@@ -1,18 +1,57 @@
 defmodule Wtransport do
-  @moduledoc """
-  Documentation for `Wtransport`.
-  """
+  defmodule SessionRequest do
+    @enforce_keys [
+      :authority,
+      :path,
+      :origin,
+      :user_agent,
+      :headers,
+      :request_tx
+    ]
 
-  @doc """
-  Hello world.
+    defstruct [
+      :authority,
+      :path,
+      :origin,
+      :user_agent,
+      :headers,
+      :request_tx
+    ]
+  end
 
-  ## Examples
+  defmodule Session do
+    defstruct [
+      :authority,
+      :path,
+      :origin,
+      :user_agent,
+      :headers
+    ]
+  end
 
-      iex> Wtransport.hello()
-      :world
+  defmodule ConnectionRequest do
+    @enforce_keys [
+      :stable_id,
+      :send_dgram_tx
+    ]
 
-  """
-  def hello do
-    :world
+    defstruct [
+      :stable_id,
+      :send_dgram_tx
+    ]
+  end
+
+  defmodule StreamRequest do
+    @enforce_keys [
+      :stream_type,
+      :request_tx,
+      :write_all_tx
+    ]
+
+    defstruct [
+      :stream_type,
+      :request_tx,
+      :write_all_tx
+    ]
   end
 end
