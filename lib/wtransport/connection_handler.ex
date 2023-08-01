@@ -25,6 +25,8 @@ defmodule Wtransport.ConnectionHandler do
 
   defmacro __using__(_opts) do
     quote location: :keep do
+      require Logger
+
       @behaviour Wtransport.ConnectionHandler
 
       # Default behaviour
@@ -53,7 +55,7 @@ defmodule Wtransport.ConnectionHandler do
 
       @impl true
       def init({%SessionRequest{} = request, stream_handler}) do
-        IO.puts("[FRI] -- Wtransport.ConnectionHandler.init")
+        Logger.debug("Wtransport.ConnectionHandler.init")
 
         session = struct(%Session{}, Map.from_struct(request))
         connection = struct(%Connection{session: session}, Map.from_struct(session))
@@ -63,10 +65,8 @@ defmodule Wtransport.ConnectionHandler do
       end
 
       @impl true
-      def terminate(reason, state) do
-        IO.puts("[FRI] -- Wtransport.ConnectionHandler.terminate")
-        IO.inspect(reason)
-        IO.inspect(state)
+      def terminate(_reason, _state) do
+        Logger.debug("Wtransport.ConnectionHandler.terminate")
 
         Wtransport.Runtime.pid_crashed(self())
 
@@ -78,7 +78,7 @@ defmodule Wtransport.ConnectionHandler do
             :session_request,
             {%Connection{} = connection, stream_handler, %SessionRequest{} = request}
           ) do
-        IO.puts("[FRI] -- Wtransport.ConnectionHandler.handle_continue :session_request")
+        Logger.debug("Wtransport.ConnectionHandler.handle_continue :session_request")
 
         case handle_session(connection.session) do
           {:continue, new_state} ->
@@ -87,7 +87,7 @@ defmodule Wtransport.ConnectionHandler do
             {:noreply, {connection, stream_handler, new_state}}
 
           _ ->
-            IO.puts("[FRI] -- Terminating Wtransport.ConnectionHandler")
+            Logger.debug("Terminating Wtransport.ConnectionHandler")
 
             {:ok, {}} =
               Wtransport.Native.reply_request(connection.request_tx, :error, self())
@@ -101,7 +101,7 @@ defmodule Wtransport.ConnectionHandler do
             {:connection_request, %ConnectionRequest{} = request},
             {%Connection{} = connection, stream_handler, state}
           ) do
-        IO.puts("[FRI] -- Wtransport.ConnectionHandler.handle_info :connection_request")
+        Logger.debug("Wtransport.ConnectionHandler.handle_info :connection_request")
 
         connection = struct(connection, Map.from_struct(request))
 
@@ -113,7 +113,7 @@ defmodule Wtransport.ConnectionHandler do
             {:noreply, {connection, stream_handler, new_state}}
 
           _ ->
-            IO.puts("[FRI] -- Terminating Wtransport.ConnectionHandler")
+            Logger.debug("Terminating Wtransport.ConnectionHandler")
 
             {:ok, {}} =
               Wtransport.Native.reply_request(connection.request_tx, :error, self())
@@ -124,8 +124,7 @@ defmodule Wtransport.ConnectionHandler do
 
       @impl true
       def handle_info({:error, error}, {%Connection{} = connection, stream_handler, state}) do
-        IO.puts("[FRI] -- Wtransport.ConnectionHandler.handle_info :error")
-        IO.inspect(error)
+        Logger.debug("Wtransport.ConnectionHandler.handle_info :error")
 
         handle_error(error, connection, state)
 
@@ -137,14 +136,14 @@ defmodule Wtransport.ConnectionHandler do
             {:datagram_received, dgram},
             {%Connection{} = connection, stream_handler, state}
           ) do
-        IO.puts("[FRI] -- Wtransport.ConnectionHandler.handle_info :datagram_received")
+        Logger.debug("Wtransport.ConnectionHandler.handle_info :datagram_received")
 
         case handle_datagram(dgram, connection, state) do
           {:continue, new_state} ->
             {:noreply, {connection, stream_handler, new_state}}
 
           _ ->
-            IO.puts("[FRI] -- Terminating Wtransport.ConnectionHandler")
+            Logger.debug("Terminating Wtransport.ConnectionHandler")
 
             {:stop, :normal, {connection, stream_handler, state}}
         end
@@ -155,7 +154,7 @@ defmodule Wtransport.ConnectionHandler do
             {:stream_request, %StreamRequest{} = request},
             {%Connection{} = connection, stream_handler, state}
           ) do
-        IO.puts("[FRI] -- Wtransport.ConnectionHandler.handle_info :stream_request")
+        Logger.debug("Wtransport.ConnectionHandler.handle_info :stream_request")
 
         {:ok, _pid} =
           DynamicSupervisor.start_child(
@@ -168,7 +167,7 @@ defmodule Wtransport.ConnectionHandler do
 
       @impl true
       def handle_info(:conn_closed, {%Connection{} = connection, stream_handler, state}) do
-        IO.puts("[FRI] -- Wtransport.ConnectionHandler.handle_info :conn_closed")
+        Logger.debug("Wtransport.ConnectionHandler.handle_info :conn_closed")
 
         handle_close(connection, state)
 

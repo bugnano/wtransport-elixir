@@ -21,6 +21,8 @@ defmodule Wtransport.StreamHandler do
 
   defmacro __using__(_opts) do
     quote location: :keep do
+      require Logger
+
       @behaviour Wtransport.StreamHandler
 
       # Default behaviour
@@ -48,7 +50,7 @@ defmodule Wtransport.StreamHandler do
 
       @impl true
       def init({%Connection{} = connection, %StreamRequest{} = request, state}) do
-        IO.puts("[FRI] -- Wtransport.StreamHandler.init")
+        Logger.debug("Wtransport.StreamHandler.init")
 
         stream = struct(%Stream{connection: connection}, Map.from_struct(request))
 
@@ -56,10 +58,8 @@ defmodule Wtransport.StreamHandler do
       end
 
       @impl true
-      def terminate(reason, state) do
-        IO.puts("[FRI] -- Wtransport.StreamHandler.terminate")
-        IO.inspect(reason)
-        IO.inspect(state)
+      def terminate(_reason, _state) do
+        Logger.debug("Wtransport.StreamHandler.terminate")
 
         Wtransport.Runtime.pid_crashed(self())
 
@@ -71,7 +71,7 @@ defmodule Wtransport.StreamHandler do
             :stream_request,
             {%Stream{} = stream, state, %StreamRequest{} = request}
           ) do
-        IO.puts("[FRI] -- Wtransport.StreamHandler.handle_continue :stream_request")
+        Logger.debug("Wtransport.StreamHandler.handle_continue :stream_request")
 
         case handle_stream(stream, state) do
           {:continue, new_state} ->
@@ -80,7 +80,7 @@ defmodule Wtransport.StreamHandler do
             {:noreply, {stream, new_state}}
 
           _ ->
-            IO.puts("[FRI] -- Terminating Wtransport.StreamHandler")
+            Logger.debug("Terminating Wtransport.StreamHandler")
 
             {:ok, {}} = Wtransport.Native.reply_request(request.request_tx, :error, self())
 
@@ -90,8 +90,7 @@ defmodule Wtransport.StreamHandler do
 
       @impl true
       def handle_info({:error, error}, {%Stream{} = stream, state}) do
-        IO.puts("[FRI] -- Wtransport.StreamHandler.handle_info :error")
-        IO.inspect(error)
+        Logger.debug("Wtransport.StreamHandler.handle_info :error")
 
         handle_error(error, stream, state)
 
@@ -100,14 +99,14 @@ defmodule Wtransport.StreamHandler do
 
       @impl true
       def handle_info({:data_received, data}, {%Stream{} = stream, state}) do
-        IO.puts("[FRI] -- Wtransport.StreamHandler.handle_info :data_received")
+        Logger.debug("Wtransport.StreamHandler.handle_info :data_received")
 
         case handle_data(data, stream, state) do
           {:continue, new_state} ->
             {:noreply, {stream, new_state}}
 
           _ ->
-            IO.puts("[FRI] -- Terminating Wtransport.StreamHandler")
+            Logger.debug("Terminating Wtransport.StreamHandler")
 
             {:stop, :normal, {stream, state}}
         end
@@ -116,14 +115,14 @@ defmodule Wtransport.StreamHandler do
       @impl true
 
       def handle_info(:stream_closed, {%Stream{} = stream, state}) do
-        IO.puts("[FRI] -- Wtransport.StreamHandler.handle_info :stream_closed")
+        Logger.debug("Wtransport.StreamHandler.handle_info :stream_closed")
 
         case handle_close(stream, state) do
           {:continue, new_state} ->
             {:noreply, {stream, new_state}}
 
           _ ->
-            IO.puts("[FRI] -- Terminating Wtransport.StreamHandler")
+            Logger.debug("Terminating Wtransport.StreamHandler")
 
             {:stop, :normal, {stream, state}}
         end

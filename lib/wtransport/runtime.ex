@@ -1,6 +1,8 @@
 defmodule Wtransport.Runtime do
   use GenServer
 
+  require Logger
+
   alias Wtransport.SessionRequest
 
   @enforce_keys [:shutdown_tx, :pid_crashed_tx]
@@ -27,11 +29,8 @@ defmodule Wtransport.Runtime do
     connection_handler = Keyword.fetch!(init_arg, :connection_handler)
     stream_handler = Keyword.fetch!(init_arg, :stream_handler)
 
-    IO.puts("[FRI] -- Wtransport.Runtime.init")
-    IO.inspect(self())
+    Logger.info("Starting the wtransport runtime")
     {:ok, runtime} = Wtransport.Native.start_runtime(self(), host, port, certfile, keyfile)
-    IO.puts("[FRI] -- runtime")
-    IO.inspect(runtime)
 
     initial_state = %{
       runtime: runtime,
@@ -43,10 +42,8 @@ defmodule Wtransport.Runtime do
   end
 
   @impl true
-  def terminate(reason, state) do
-    IO.puts("[FRI] -- Wtransport.Runtime.terminate")
-    IO.inspect(reason)
-    IO.inspect(state)
+  def terminate(_reason, state) do
+    Logger.debug("Wtransport.Runtime.terminate")
 
     Wtransport.Native.stop_runtime(state.runtime)
 
@@ -68,7 +65,7 @@ defmodule Wtransport.Runtime do
 
   @impl true
   def handle_info({:session_request, %SessionRequest{} = request}, state) do
-    IO.puts("[FRI] -- Wtransport.Runtime.handle_info :session_request")
+    Logger.debug("Wtransport.Runtime.handle_info :session_request")
 
     {:ok, _pid} =
       DynamicSupervisor.start_child(
