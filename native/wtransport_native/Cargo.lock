@@ -1198,8 +1198,7 @@ checksum = "1a515f5799fe4961cb532f983ce2b23082366b898e52ffbce459c86f67c8378a"
 [[package]]
 name = "wtransport"
 version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e917b4460c9bdd764da8da36c84d0b3a55cefef9b1d02ea618367760bcb349a"
+source = "git+https://github.com/BiagioFesta/wtransport.git?branch=dont-expose-proto-headers#55d9a7f480f465c53ac5a40467b1975f19d9ab37"
 dependencies = [
  "bytes",
  "quinn",
@@ -1217,8 +1216,7 @@ dependencies = [
 [[package]]
 name = "wtransport-proto"
 version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff825d2f61eec48c8429c4a6cb1c4835eab113aaacd18cfe2ce867ea2cca9e05"
+source = "git+https://github.com/BiagioFesta/wtransport.git?branch=dont-expose-proto-headers#55d9a7f480f465c53ac5a40467b1975f19d9ab37"
 dependencies = [
  "ls-qpack",
  "octets",

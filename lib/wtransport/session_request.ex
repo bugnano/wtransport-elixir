@@ -4,7 +4,8 @@ defmodule Wtransport.SessionRequest do
     :path,
     :origin,
     :user_agent,
-    :session_request_tx
+    :headers,
+    :request_tx
   ]
 
   defstruct [
@@ -12,6 +13,7 @@ defmodule Wtransport.SessionRequest do
     :path,
     :origin,
     :user_agent,
-    :session_request_tx
+    :headers,
+    :request_tx
   ]
 end

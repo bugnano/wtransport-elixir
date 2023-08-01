@@ -24,7 +24,7 @@ defmodule Wtransport.Runtime do
     port = Keyword.fetch!(init_arg, :port)
     certfile = Keyword.fetch!(init_arg, :certfile)
     keyfile = Keyword.fetch!(init_arg, :keyfile)
-    socket_handler = Keyword.fetch!(init_arg, :socket_handler)
+    connection_handler = Keyword.fetch!(init_arg, :connection_handler)
     stream_handler = Keyword.fetch!(init_arg, :stream_handler)
 
     IO.puts("[FRI] -- Wtransport.Runtime.init")
@@ -35,7 +35,7 @@ defmodule Wtransport.Runtime do
 
     initial_state = %{
       runtime: runtime,
-      socket_handler: socket_handler,
+      connection_handler: connection_handler,
       stream_handler: stream_handler
     }
 
@@ -73,7 +73,7 @@ defmodule Wtransport.Runtime do
     {:ok, _pid} =
       DynamicSupervisor.start_child(
         Wtransport.DynamicSupervisor,
-        {state.socket_handler, {request, state.stream_handler}}
+        {state.connection_handler, {request, state.stream_handler}}
       )
 
     {:noreply, state}

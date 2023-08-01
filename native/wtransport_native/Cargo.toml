@@ -14,5 +14,6 @@ rustler = "0.29"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-wtransport = "0.1"
+#wtransport = "0.1"
+wtransport = { git = "https://github.com/BiagioFesta/wtransport.git", branch = "dont-expose-proto-headers" }
 

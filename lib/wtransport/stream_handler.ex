@@ -1,7 +1,7 @@
 defmodule Wtransport.StreamHandler do
-  alias Wtransport.Socket
-  alias Wtransport.Stream
+  alias Wtransport.Connection
   alias Wtransport.StreamRequest
+  alias Wtransport.Stream
 
   @callback handle_stream(stream :: Stream.t(), state :: term()) :: term()
 
@@ -40,18 +40,17 @@ defmodule Wtransport.StreamHandler do
 
       # Client
 
-      def start_link({%Socket{} = socket, %StreamRequest{} = request, state}) do
-        GenServer.start_link(__MODULE__, {socket, request, state})
+      def start_link({%Connection{} = connection, %StreamRequest{} = request, state}) do
+        GenServer.start_link(__MODULE__, {connection, request, state})
       end
 
       # Server (callbacks)
 
       @impl true
-      def init({%Socket{} = socket, %StreamRequest{} = request, state}) do
+      def init({%Connection{} = connection, %StreamRequest{} = request, state}) do
         IO.puts("[FRI] -- Wtransport.StreamHandler.init")
 
-        stream = struct(%Stream{socket: socket}, Map.from_struct(request))
-        IO.inspect(stream)
+        stream = struct(%Stream{connection: connection}, Map.from_struct(request))
 
         {:ok, {stream, state, request}, {:continue, :stream_request}}
       end
@@ -76,14 +75,14 @@ defmodule Wtransport.StreamHandler do
 
         case handle_stream(stream, state) do
           {:continue, new_state} ->
-            {:ok, {}} = Wtransport.Native.reply_request(request.stream_request_tx, :ok, self())
+            {:ok, {}} = Wtransport.Native.reply_request(request.request_tx, :ok, self())
 
             {:noreply, {stream, new_state}}
 
           _ ->
             IO.puts("[FRI] -- Terminating Wtransport.StreamHandler")
 
-            {:ok, {}} = Wtransport.Native.reply_request(request.stream_request_tx, :error, self())
+            {:ok, {}} = Wtransport.Native.reply_request(request.request_tx, :error, self())
 
             {:stop, :normal, {stream, state}}
         end

@@ -1,4 +1,5 @@
 use rustler::{Atom, Encoder, Env, LocalPid, NifStruct, OwnedEnv, ResourceArc, Term};
+use std::collections::HashMap;
 use std::error::Error;
 use std::net::ToSocketAddrs;
 use std::time::Duration;
@@ -13,6 +14,7 @@ use tracing_subscriber::EnvFilter;
 use wtransport::endpoint::{IncomingSession, SessionRequest};
 use wtransport::stream::{RecvStream, SendStream};
 use wtransport::tls::Certificate;
+use wtransport::Connection;
 use wtransport::Endpoint;
 use wtransport::ServerConfig;
 
@@ -29,6 +31,9 @@ mod atoms {
         uni,
         data_received,
         stream_closed,
+        remote_address,
+        max_datagram_size,
+        rtt,
     }
 }
 
@@ -51,14 +56,14 @@ struct NifSessionRequest {
     path: String,
     origin: Option<String>,
     user_agent: Option<String>,
-    session_request_tx: ResourceArc<XRequestSender>,
+    headers: HashMap<String, String>,
+    request_tx: ResourceArc<XRequestSender>,
 }
 
 #[derive(NifStruct)]
 #[module = "Wtransport.ConnectionRequest"]
 struct NifConnectionRequest {
     stable_id: usize,
-    connection_request_tx: ResourceArc<XRequestSender>,
     send_dgram_tx: ResourceArc<XDataSender>,
 }
 
@@ -66,7 +71,7 @@ struct NifConnectionRequest {
 #[module = "Wtransport.StreamRequest"]
 struct NifStreamRequest {
     stream_type: Atom,
-    stream_request_tx: ResourceArc<XRequestSender>,
+    request_tx: ResourceArc<XRequestSender>,
     write_all_tx: Option<ResourceArc<XDataSender>>,
 }
 
@@ -234,7 +239,6 @@ async fn handle_connection(
         }
     };
 
-    // TODO: Expose all the fields (at the moment the headers are missing because the HashMap in the headers is a private field)
     let authority = session_request.authority().to_string();
     let path = session_request.path().to_string();
     let origin = session_request.origin().map(|origin| origin.to_string());
@@ -242,9 +246,11 @@ async fn handle_connection(
         .user_agent()
         .map(|user_agent| user_agent.to_string());
 
+    let headers = session_request.headers().clone();
+
     info!("New session: Authority: '{}', Path: '{}'", authority, path);
 
-    let (session_request_tx, mut session_request_rx) = tokio::sync::mpsc::channel(1);
+    let (request_tx, mut request_rx) = tokio::sync::mpsc::channel(1);
 
     let mut msg_env = OwnedEnv::new();
     msg_env.send_and_clear(&runtime_pid, |env| {
@@ -255,15 +261,25 @@ async fn handle_connection(
                 path,
                 origin,
                 user_agent,
-                session_request_tx: ResourceArc::new(XRequestSender(session_request_tx)),
+                headers,
+                request_tx: ResourceArc::new(XRequestSender(request_tx)),
             },
         )
             .encode(env)
     });
 
-    let (result, pid) = session_request_rx.recv().await.unwrap();
+    let (result, pid) = request_rx.recv().await.unwrap();
 
-    match handle_connection_impl(shutdown_tx, pid_crashed_tx, session_request, result, pid).await {
+    match handle_connection_impl(
+        shutdown_tx,
+        pid_crashed_tx,
+        session_request,
+        request_rx,
+        result,
+        pid,
+    )
+    .await
+    {
         Ok(()) => (),
         Err(error) => {
             msg_env.send_and_clear(&pid, |env| (atoms::error(), error.to_string()).encode(env));
@@ -276,6 +292,7 @@ async fn handle_connection_impl(
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
     pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
     session_request: SessionRequest,
+    mut request_rx: tokio::sync::mpsc::Receiver<(Atom, LocalPid)>,
     result: Atom,
     pid: LocalPid,
 ) -> Result<(), Box<dyn Error>> {
@@ -297,7 +314,6 @@ async fn handle_connection_impl(
 
     let connection = session_request.accept().await?;
 
-    let (connection_request_tx, mut connection_request_rx) = tokio::sync::mpsc::channel(1);
     let (send_dgram_tx, mut send_dgram_rx) = tokio::sync::mpsc::channel(1);
 
     msg_env.send_and_clear(&pid, |env| {
@@ -305,18 +321,20 @@ async fn handle_connection_impl(
             atoms::connection_request(),
             NifConnectionRequest {
                 stable_id: connection.stable_id(),
-                connection_request_tx: ResourceArc::new(XRequestSender(connection_request_tx)),
                 send_dgram_tx: ResourceArc::new(XDataSender(send_dgram_tx)),
             },
         )
             .encode(env)
     });
 
-    let (result, _pid) = connection_request_rx.recv().await.unwrap();
-
-    if result != atoms::ok() {
-        info!("Connection refused");
-        return Ok(());
+    loop {
+        if let Some(result) = handle_request(&connection, request_rx.recv().await.unwrap()) {
+            if !result {
+                info!("Connection refused");
+                return Ok(());
+            }
+            break;
+        }
     }
 
     info!("Waiting for data from client...");
@@ -379,6 +397,9 @@ async fn handle_connection_impl(
             Some(dgram) = send_dgram_rx.recv() => {
                 connection.send_datagram(dgram)?;
             }
+            Some(request) = request_rx.recv() => {
+                handle_request(&connection, request);
+            }
             Ok(crashed_pid) = pid_crashed_rx.recv() => {
                 // Ugly hack for comparing 2 pids:
                 // The only way I found to compare 2 pids is to take advantage of the fact that
@@ -396,6 +417,39 @@ async fn handle_connection_impl(
     }
 }
 
+fn handle_request(connection: &Connection, (request, pid): (Atom, LocalPid)) -> Option<bool> {
+    let mut msg_env = OwnedEnv::new();
+
+    if request == atoms::ok() {
+        return Some(true);
+    } else if request == atoms::error() {
+        return Some(false);
+    } else if request == atoms::remote_address() {
+        let remote_address = connection.remote_address();
+
+        msg_env.send_and_clear(&pid, |env| {
+            (
+                atoms::remote_address(),
+                remote_address.ip().to_string(),
+                remote_address.port(),
+            )
+                .encode(env)
+        });
+    } else if request == atoms::max_datagram_size() {
+        let max_datagram_size = connection.max_datagram_size();
+
+        msg_env.send_and_clear(&pid, |env| {
+            (atoms::max_datagram_size(), max_datagram_size).encode(env)
+        });
+    } else if request == atoms::rtt() {
+        let rtt = connection.rtt();
+
+        msg_env.send_and_clear(&pid, |env| (atoms::rtt(), rtt.as_secs_f64()).encode(env));
+    }
+
+    None
+}
+
 async fn handle_stream(
     socket_pid: LocalPid,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
@@ -403,7 +457,7 @@ async fn handle_stream(
     send_stream: Option<SendStream>,
     recv_stream: RecvStream,
 ) {
-    let (stream_request_tx, mut stream_request_rx) = tokio::sync::mpsc::channel(1);
+    let (request_tx, mut request_rx) = tokio::sync::mpsc::channel(1);
     let (write_all_tx, write_all_rx) = tokio::sync::mpsc::channel(1);
 
     let mut msg_env = OwnedEnv::new();
@@ -413,12 +467,12 @@ async fn handle_stream(
             match send_stream {
                 Some(_) => NifStreamRequest {
                     stream_type: atoms::bi(),
-                    stream_request_tx: ResourceArc::new(XRequestSender(stream_request_tx)),
+                    request_tx: ResourceArc::new(XRequestSender(request_tx)),
                     write_all_tx: Some(ResourceArc::new(XDataSender(write_all_tx))),
                 },
                 None => NifStreamRequest {
                     stream_type: atoms::uni(),
-                    stream_request_tx: ResourceArc::new(XRequestSender(stream_request_tx)),
+                    request_tx: ResourceArc::new(XRequestSender(request_tx)),
                     write_all_tx: None,
                 },
             },
@@ -426,7 +480,7 @@ async fn handle_stream(
             .encode(env)
     });
 
-    let (result, pid) = stream_request_rx.recv().await.unwrap();
+    let (result, pid) = request_rx.recv().await.unwrap();
 
     match handle_stream_impl(
         shutdown_tx,

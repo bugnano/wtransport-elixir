@@ -1,11 +1,13 @@
 defmodule WtransportEcho.StreamHandler do
-  alias Wtransport.Stream
-
   use Wtransport.StreamHandler
 
+  alias Wtransport.Stream
+
   @impl Wtransport.StreamHandler
-  def handle_stream(%Stream{} = _stream, state) do
+  def handle_stream(%Stream{} = stream, state) do
     IO.puts("[FRI] -- WtransportEcho.StreamHandler.handle_stream")
+    IO.inspect(stream)
+
     {:continue, state}
   end
 
@@ -13,7 +15,9 @@ defmodule WtransportEcho.StreamHandler do
   def handle_data(data, %Stream{} = stream, state) do
     IO.puts("[FRI] -- WtransportEcho.StreamHandler.handle_data")
 
-    :ok = Stream.send(stream, "Reply from WtransportEcho: -- #{data} -- END WtransportEcho")
+    if stream.stream_type == :bi do
+      :ok = Stream.send(stream, "Reply from WtransportEcho: -- #{data} -- END WtransportEcho")
+    end
 
     {:continue, state}
   end

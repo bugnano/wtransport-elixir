@@ -5,5 +5,5 @@ config :wtransport_echo, :wtransport_options,
   port: 4433,
   certfile: "/home/fri/mkcert/localhost+2.pem",
   keyfile: "/home/fri/mkcert/localhost+2-key.pem",
-  socket_handler: WtransportEcho.SocketHandler,
+  connection_handler: WtransportEcho.ConnectionHandler,
   stream_handler: WtransportEcho.StreamHandler
