@@ -43,7 +43,7 @@ defmodule Wtransport.Runtime do
 
   @impl true
   def terminate(_reason, state) do
-    Logger.debug("Wtransport.Runtime.terminate")
+    Logger.debug("terminate")
 
     Wtransport.Native.stop_runtime(state.runtime)
 
@@ -65,7 +65,7 @@ defmodule Wtransport.Runtime do
 
   @impl true
   def handle_info({:session_request, %SessionRequest{} = request}, state) do
-    Logger.debug("Wtransport.Runtime.handle_info :session_request")
+    Logger.debug(":session_request")
 
     {:ok, _pid} =
       DynamicSupervisor.start_child(

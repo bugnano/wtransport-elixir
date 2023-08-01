@@ -77,15 +77,17 @@ defmodule Wtransport.StreamHandler do
 
       # Client
 
-      def start_link({%Connection{} = connection, %StreamRequest{} = request, state}) do
-        GenServer.start_link(__MODULE__, {connection, request, state})
+      def start_link({%Connection{} = connection, %StreamRequest{} = request, state, conn_pid}) do
+        GenServer.start_link(__MODULE__, {connection, request, state, conn_pid})
       end
 
       # Server (callbacks)
 
       @impl true
-      def init({%Connection{} = connection, %StreamRequest{} = request, state}) do
-        Logger.debug("Wtransport.StreamHandler.init")
+      def init({%Connection{} = connection, %StreamRequest{} = request, state, conn_pid}) do
+        Logger.debug("init")
+
+        Process.monitor(conn_pid)
 
         stream = struct(%Stream{connection: connection}, Map.from_struct(request))
 
@@ -95,11 +97,11 @@ defmodule Wtransport.StreamHandler do
       @impl true
       def terminate(_reason, {%Stream{} = stream, _state}) do
         if stream.request_tx != nil do
-          Logger.debug("Wtransport.StreamHandler.terminate (1)")
+          Logger.debug("terminate (1)")
 
           Wtransport.Native.reply_request(stream.request_tx, :pid_crashed, self())
         else
-          Logger.debug("Wtransport.StreamHandler.terminate (2)")
+          Logger.debug("terminate (2)")
 
           Wtransport.Runtime.pid_crashed(self())
         end
@@ -109,7 +111,7 @@ defmodule Wtransport.StreamHandler do
 
       @impl true
       def terminate(_reason, _state) do
-        Logger.debug("Wtransport.StreamHandler.terminate (3)")
+        Logger.debug("terminate (3)")
 
         Wtransport.Runtime.pid_crashed(self())
 
@@ -121,7 +123,7 @@ defmodule Wtransport.StreamHandler do
             :stream_request,
             {%Stream{} = stream, {%StreamRequest{} = request, state}}
           ) do
-        Logger.debug("Wtransport.StreamHandler.handle_continue :stream_request")
+        Logger.debug(":stream_request")
 
         case handle_stream(stream, state) do
           {:continue, new_state} ->
@@ -130,8 +132,6 @@ defmodule Wtransport.StreamHandler do
             {:noreply, {stream, new_state}}
 
           _ ->
-            Logger.debug("Terminating Wtransport.StreamHandler")
-
             {:ok, {}} = Wtransport.Native.reply_request(request.request_tx, :error, self())
 
             {:stop, :normal, {stream, state}}
@@ -153,8 +153,17 @@ defmodule Wtransport.StreamHandler do
       end
 
       @impl true
+      def handle_info({:DOWN, _ref, :process, _object, _reason}, {%Stream{} = stream, state}) do
+        Logger.debug(":DOWN")
+
+        handle_error("pid_crashed", stream, state)
+
+        {:stop, :normal, {stream, state}}
+      end
+
+      @impl true
       def handle_info({:error, error}, {%Stream{} = stream, state}) do
-        Logger.debug("Wtransport.StreamHandler.handle_info :error")
+        Logger.debug(":error")
 
         handle_error(error, stream, state)
 
@@ -163,30 +172,26 @@ defmodule Wtransport.StreamHandler do
 
       @impl true
       def handle_info({:data_received, data}, {%Stream{} = stream, state}) do
-        Logger.debug("Wtransport.StreamHandler.handle_info :data_received")
+        Logger.debug(":data_received")
 
         case handle_data(data, stream, state) do
           {:continue, new_state} ->
             {:noreply, {stream, new_state}}
 
           _ ->
-            Logger.debug("Terminating Wtransport.StreamHandler")
-
             {:stop, :normal, {stream, state}}
         end
       end
 
       @impl true
       def handle_info(:stream_closed, {%Stream{} = stream, state}) do
-        Logger.debug("Wtransport.StreamHandler.handle_info :stream_closed")
+        Logger.debug(":stream_closed")
 
         case handle_close(stream, state) do
           {:continue, new_state} ->
             {:noreply, {stream, new_state}}
 
           _ ->
-            Logger.debug("Terminating Wtransport.StreamHandler")
-
             {:stop, :normal, {stream, state}}
         end
       end
