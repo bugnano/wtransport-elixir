@@ -97,23 +97,10 @@ defmodule Wtransport.StreamHandler do
       @impl true
       def terminate(_reason, {%Stream{} = stream, _state}) do
         if stream.request_tx != nil do
-          Logger.debug("terminate (1)")
+          Logger.debug("terminate")
 
           Wtransport.Native.reply_request(stream.request_tx, :pid_crashed, self())
-        else
-          Logger.debug("terminate (2)")
-
-          Wtransport.Runtime.pid_crashed(self())
         end
-
-        :ok
-      end
-
-      @impl true
-      def terminate(_reason, _state) do
-        Logger.debug("terminate (3)")
-
-        Wtransport.Runtime.pid_crashed(self())
 
         :ok
       end

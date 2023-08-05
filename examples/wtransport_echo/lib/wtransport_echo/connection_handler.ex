@@ -4,10 +4,10 @@ defmodule WtransportEcho.ConnectionHandler do
   alias Wtransport.Session
   alias Wtransport.Connection
 
+  # ConnectionHandler specific callbacks
+
   @impl Wtransport.ConnectionHandler
   def handle_session(%Session{} = _session) do
-    IO.puts("[FRI] -- WtransportEcho.ConnectionHandler.handle_session")
-
     state = %{}
 
     {:continue, state}
@@ -15,35 +15,45 @@ defmodule WtransportEcho.ConnectionHandler do
 
   @impl Wtransport.ConnectionHandler
   def handle_connection(%Connection{} = _connection, state) do
-    IO.puts("[FRI] -- WtransportEcho.ConnectionHandler.handle_connection")
-
     {:continue, state}
   end
 
   @impl Wtransport.ConnectionHandler
   def handle_datagram(dgram, %Connection{} = connection, state) do
-    IO.puts("[FRI] -- WtransportEcho.ConnectionHandler.handle_datagram")
-
-    :ok =
-      Connection.send_datagram(
-        connection,
-        "Reply from WtransportEcho: -- #{dgram} -- END WtransportEcho"
-      )
+    :ok = Connection.send_datagram(connection, dgram)
 
     {:continue, state}
   end
 
   @impl Wtransport.ConnectionHandler
   def handle_close(%Connection{} = _connection, _state) do
-    IO.puts("[FRI] -- WtransportEcho.ConnectionHandler.handle_close")
     :ok
   end
 
   @impl Wtransport.ConnectionHandler
-  def handle_error(reason, %Connection{} = _connection, _state) do
-    IO.puts("[FRI] -- WtransportEcho.ConnectionHandler.handle_error")
-    IO.puts(reason)
-
+  def handle_error(_reason, %Connection{} = _connection, _state) do
     :ok
+  end
+
+  # GenServer style callbacks
+
+  @impl Wtransport.ConnectionHandler
+  def handle_continue(_continue_arg, %Connection{} = _connection, state) do
+    {:noreply, state}
+  end
+
+  @impl Wtransport.ConnectionHandler
+  def handle_info(_msg, %Connection{} = _connection, state) do
+    {:noreply, state}
+  end
+
+  @impl Wtransport.ConnectionHandler
+  def handle_call(request, _from, %Connection{} = _connection, state) do
+    {:reply, request, state}
+  end
+
+  @impl Wtransport.ConnectionHandler
+  def handle_cast(_request, %Connection{} = _connection, state) do
+    {:noreply, state}
   end
 end

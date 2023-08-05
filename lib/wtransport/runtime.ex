@@ -5,37 +5,45 @@ defmodule Wtransport.Runtime do
 
   alias Wtransport.SessionRequest
 
-  @enforce_keys [:shutdown_tx, :pid_crashed_tx]
-  defstruct [:shutdown_tx, :pid_crashed_tx]
+  @enforce_keys [:shutdown_tx]
+  defstruct [:shutdown_tx]
 
   # Client
 
-  def start_link(init_arg) do
-    GenServer.start_link(__MODULE__, init_arg, name: __MODULE__)
-  end
-
-  def pid_crashed(pid) do
-    GenServer.cast(__MODULE__, {:pid_crashed, pid})
+  def start_link({wtransport_options, supervisor_pid}) do
+    GenServer.start_link(__MODULE__, {wtransport_options, supervisor_pid})
   end
 
   # Server (callbacks)
 
   @impl true
-  def init(init_arg) do
-    host = Keyword.fetch!(init_arg, :host)
-    port = Keyword.fetch!(init_arg, :port)
-    certfile = Keyword.fetch!(init_arg, :certfile)
-    keyfile = Keyword.fetch!(init_arg, :keyfile)
-    connection_handler = Keyword.fetch!(init_arg, :connection_handler)
-    stream_handler = Keyword.fetch!(init_arg, :stream_handler)
+  def init({wtransport_options, supervisor_pid}) do
+    wtransport_options =
+      Keyword.take(wtransport_options, [
+        :host,
+        :port,
+        :certfile,
+        :keyfile,
+        :connection_handler,
+        :stream_handler
+      ])
 
-    Logger.info("Starting the wtransport runtime")
+    host = Keyword.fetch!(wtransport_options, :host)
+    port = Keyword.fetch!(wtransport_options, :port)
+    certfile = Keyword.fetch!(wtransport_options, :certfile)
+    keyfile = Keyword.fetch!(wtransport_options, :keyfile)
+    connection_handler = Keyword.fetch!(wtransport_options, :connection_handler)
+    stream_handler = Keyword.fetch!(wtransport_options, :stream_handler)
+
+    Logger.debug("Starting the wtransport runtime #{inspect(wtransport_options)}")
     {:ok, runtime} = Wtransport.Native.start_runtime(self(), host, port, certfile, keyfile)
+    Logger.info("Started the wtransport runtime #{inspect(wtransport_options)}")
 
     initial_state = %{
       runtime: runtime,
       connection_handler: connection_handler,
-      stream_handler: stream_handler
+      stream_handler: stream_handler,
+      supervisor_pid: supervisor_pid
     }
 
     {:ok, initial_state}
@@ -57,20 +65,13 @@ defmodule Wtransport.Runtime do
   end
 
   @impl true
-  def handle_cast({:pid_crashed, pid}, state) do
-    Wtransport.Native.pid_crashed(state.runtime, pid)
-
-    {:noreply, state}
-  end
-
-  @impl true
   def handle_info({:session_request, %SessionRequest{} = request}, state) do
     Logger.debug(":session_request")
 
     {:ok, _pid} =
       DynamicSupervisor.start_child(
-        Wtransport.DynamicSupervisor,
-        {state.connection_handler, {request, state.stream_handler}}
+        state.supervisor_pid,
+        {state.connection_handler, {request, state}}
       )
 
     {:noreply, state}

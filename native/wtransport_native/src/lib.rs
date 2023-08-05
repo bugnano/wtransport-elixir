@@ -39,7 +39,6 @@ mod atoms {
 }
 
 struct XShutdownSender(tokio::sync::broadcast::Sender<()>);
-struct XCrashSender(tokio::sync::broadcast::Sender<LocalPid>);
 struct XRequestSender(tokio::sync::mpsc::Sender<(Atom, LocalPid)>);
 struct XDataSender(tokio::sync::mpsc::Sender<String>);
 
@@ -47,7 +46,6 @@ struct XDataSender(tokio::sync::mpsc::Sender<String>);
 #[module = "Wtransport.Runtime"]
 struct NifRuntime {
     shutdown_tx: ResourceArc<XShutdownSender>,
-    pid_crashed_tx: ResourceArc<XCrashSender>,
 }
 
 #[derive(NifStruct)]
@@ -82,7 +80,6 @@ fn load(env: Env, _term: Term) -> bool {
     debug!("load(term: {:?})", _term);
 
     rustler::resource!(XShutdownSender, env);
-    rustler::resource!(XCrashSender, env);
     rustler::resource!(XRequestSender, env);
     rustler::resource!(XDataSender, env);
 
@@ -143,7 +140,6 @@ fn start_runtime_impl(
 ) -> Result<NifRuntime, Box<dyn Error>> {
     let (tx, rx) = std::sync::mpsc::channel();
     let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
-    let (pid_crashed_tx, _pid_crashed_rx) = tokio::sync::broadcast::channel(1);
 
     let mut addrs_iter = (host, port).to_socket_addrs()?;
 
@@ -164,19 +160,9 @@ fn start_runtime_impl(
         .build()?;
 
     let shutdown_tx2 = shutdown_tx.clone();
-    let pid_crashed_tx2 = pid_crashed_tx.clone();
     std::thread::spawn(move || {
         runtime.block_on(async {
-            match server_loop(
-                pid,
-                config,
-                tx.clone(),
-                shutdown_tx2,
-                shutdown_rx,
-                pid_crashed_tx2,
-            )
-            .await
-            {
+            match server_loop(pid, config, tx.clone(), shutdown_tx2, shutdown_rx).await {
                 Ok(()) => (),
                 Err(error) => {
                     let _ = tx.send(Err(error.to_string()));
@@ -189,7 +175,6 @@ fn start_runtime_impl(
 
     Ok(NifRuntime {
         shutdown_tx: ResourceArc::new(XShutdownSender(shutdown_tx)),
-        pid_crashed_tx: ResourceArc::new(XCrashSender(pid_crashed_tx)),
     })
 }
 
@@ -199,7 +184,6 @@ async fn server_loop(
     tx: std::sync::mpsc::Sender<Result<(), String>>,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-    pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
 ) -> Result<(), Box<dyn Error>> {
     let server = Endpoint::server(config)?;
 
@@ -213,7 +197,7 @@ async fn server_loop(
                 let incoming_session = server.accept().await;
                 debug!("Connection accepted");
                 tokio::spawn(
-                    handle_connection(pid, shutdown_tx.clone(), pid_crashed_tx.clone(), incoming_session)
+                    handle_connection(pid, shutdown_tx.clone(), incoming_session)
                         .instrument(info_span!("Connection", id)),
                 );
             }
@@ -229,7 +213,6 @@ async fn server_loop(
 async fn handle_connection(
     runtime_pid: LocalPid,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
-    pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
     incoming_session: IncomingSession,
 ) {
     info!("Waiting for session request...");
@@ -273,16 +256,7 @@ async fn handle_connection(
 
     let (result, pid) = request_rx.recv().await.unwrap();
 
-    match handle_connection_impl(
-        shutdown_tx,
-        pid_crashed_tx,
-        session_request,
-        request_rx,
-        result,
-        pid,
-    )
-    .await
-    {
+    match handle_connection_impl(shutdown_tx, session_request, request_rx, result, pid).await {
         Ok(()) => (),
         Err(error) => {
             msg_env.send_and_clear(&pid, |env| (atoms::error(), error.to_string()).encode(env));
@@ -293,7 +267,6 @@ async fn handle_connection(
 
 async fn handle_connection_impl(
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
-    pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
     session_request: SessionRequest,
     mut request_rx: tokio::sync::mpsc::Receiver<(Atom, LocalPid)>,
     result: Atom,
@@ -301,11 +274,7 @@ async fn handle_connection_impl(
 ) -> Result<(), Box<dyn Error>> {
     let mut msg_env = OwnedEnv::new();
     let mut shutdown_rx = shutdown_tx.subscribe();
-    let mut pid_crashed_rx = pid_crashed_tx.subscribe();
     let mut id = 0;
-
-    // This is for the ugly hack for comparing 2 pids
-    let pid_repr = format!("{:?}", pid.as_c_arg());
 
     if result != atoms::ok() {
         info!("Session request refused");
@@ -352,7 +321,6 @@ async fn handle_connection_impl(
                     handle_stream(
                         pid,
                         shutdown_tx.clone(),
-                        pid_crashed_tx.clone(),
                         Some(send_stream),
                         recv_stream,
                     )
@@ -368,7 +336,6 @@ async fn handle_connection_impl(
                     handle_stream(
                         pid,
                         shutdown_tx.clone(),
-                        pid_crashed_tx.clone(),
                         None,
                         stream,
                     )
@@ -406,15 +373,6 @@ async fn handle_connection_impl(
                     return Ok(());
                 }
             }
-            Ok(crashed_pid) = pid_crashed_rx.recv() => {
-                // Ugly hack for comparing 2 pids:
-                // The only way I found to compare 2 pids is to take advantage of the fact that
-                // the ErlNifPid type has the Debug trait, so I compare the debug representation of the pids
-                if format!("{:?}", crashed_pid.as_c_arg()) == pid_repr {
-                    info!("Handled pid crashed (2)");
-                    return Ok(());
-                }
-            }
             _ = shutdown_rx.recv() => {
                 info!("Connection loop stopped");
                 return Ok(());
@@ -431,6 +389,8 @@ fn handle_request(connection: &Connection, (request, pid): (Atom, LocalPid)) -> 
     } else if request == atoms::error() {
         return Some(false);
     } else if request == atoms::pid_crashed() {
+        info!("Handled pid crashed");
+
         return Some(false);
     } else if request == atoms::remote_address() {
         let remote_address = connection.remote_address();
@@ -461,7 +421,6 @@ fn handle_request(connection: &Connection, (request, pid): (Atom, LocalPid)) -> 
 async fn handle_stream(
     socket_pid: LocalPid,
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
-    pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
     send_stream: Option<SendStream>,
     recv_stream: RecvStream,
 ) {
@@ -492,7 +451,6 @@ async fn handle_stream(
 
     match handle_stream_impl(
         shutdown_tx,
-        pid_crashed_tx,
         send_stream,
         recv_stream,
         request_rx,
@@ -512,7 +470,6 @@ async fn handle_stream(
 
 async fn handle_stream_impl(
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
-    pid_crashed_tx: tokio::sync::broadcast::Sender<LocalPid>,
     mut send_stream: Option<SendStream>,
     mut recv_stream: RecvStream,
     mut request_rx: tokio::sync::mpsc::Receiver<(Atom, LocalPid)>,
@@ -523,11 +480,7 @@ async fn handle_stream_impl(
     let mut buffer = vec![0; 65536].into_boxed_slice();
     let mut msg_env = OwnedEnv::new();
     let mut shutdown_rx = shutdown_tx.subscribe();
-    let mut pid_crashed_rx = pid_crashed_tx.subscribe();
     let mut recv_stream_open = true;
-
-    // This is for the ugly hack for comparing 2 pids
-    let pid_repr = format!("{:?}", pid.as_c_arg());
 
     if result != atoms::ok() {
         info!("Stream refused");
@@ -564,16 +517,7 @@ async fn handle_stream_impl(
             }
             Some((request, _request_pid)) = request_rx.recv() => {
                 if request == atoms::pid_crashed() {
-                    info!("Handled pid crashed (1)");
-                    return Ok(());
-                }
-            }
-            Ok(crashed_pid) = pid_crashed_rx.recv() => {
-                // Ugly hack for comparing 2 pids:
-                // The only way I found to compare 2 pids is to take advantage of the fact that
-                // the ErlNifPid type has the Debug trait, so I compare the debug representation of the pids
-                if format!("{:?}", crashed_pid.as_c_arg()) == pid_repr {
-                    info!("Handled pid crashed (2)");
+                    info!("Handled pid crashed");
                     return Ok(());
                 }
             }
@@ -598,25 +542,6 @@ fn stop_runtime(runtime: NifRuntime) -> Result<(), String> {
             Ok(())
         }
         Err(error) => Err(error.to_string()),
-    }
-}
-
-#[rustler::nif]
-fn pid_crashed(runtime: NifRuntime, pid: LocalPid) -> Result<(), String> {
-    debug!("pid_crashed()");
-
-    let now = std::time::Instant::now();
-
-    match runtime.pid_crashed_tx.0.send(pid) {
-        Ok(_) => {
-            let elapsed_time = now.elapsed();
-            debug!("elapsed_time (pid_crashed): {:?}", elapsed_time);
-            Ok(())
-        }
-        Err(error) => {
-            debug!("error (pid_crashed): {:?}", error.to_string());
-            Err(error.to_string())
-        }
     }
 }
 
@@ -658,12 +583,6 @@ fn send_data(tx_channel: ResourceArc<XDataSender>, data: String) -> Result<(), S
 
 rustler::init!(
     "Elixir.Wtransport.Native",
-    [
-        start_runtime,
-        stop_runtime,
-        pid_crashed,
-        reply_request,
-        send_data,
-    ],
+    [start_runtime, stop_runtime, reply_request, send_data,],
     load = load
 );

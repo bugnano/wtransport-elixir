@@ -3,19 +3,17 @@ defmodule WtransportEcho.StreamHandler do
 
   alias Wtransport.Stream
 
+  # StreamHandler specific callbacks
+
   @impl Wtransport.StreamHandler
   def handle_stream(%Stream{} = _stream, state) do
-    IO.puts("[FRI] -- WtransportEcho.StreamHandler.handle_stream")
-
     {:continue, state}
   end
 
   @impl Wtransport.StreamHandler
   def handle_data(data, %Stream{} = stream, state) do
-    IO.puts("[FRI] -- WtransportEcho.StreamHandler.handle_data")
-
     if stream.stream_type == :bi do
-      :ok = Stream.send(stream, "Reply from WtransportEcho: -- #{data} -- END WtransportEcho")
+      :ok = Stream.send(stream, data)
     end
 
     {:continue, state}
@@ -23,8 +21,6 @@ defmodule WtransportEcho.StreamHandler do
 
   @impl Wtransport.StreamHandler
   def handle_close(%Stream{} = stream, state) do
-    IO.puts("[FRI] -- WtransportEcho.StreamHandler.handle_close")
-
     case stream.stream_type do
       :bi -> {:continue, state}
       :uni -> :close
@@ -32,10 +28,29 @@ defmodule WtransportEcho.StreamHandler do
   end
 
   @impl Wtransport.StreamHandler
-  def handle_error(reason, %Stream{} = _stream, _state) do
-    IO.puts("[FRI] -- WtransportEcho.StreamHandler.handle_error")
-    IO.puts(reason)
-
+  def handle_error(_reason, %Stream{} = _stream, _state) do
     :ok
+  end
+
+  # GenServer style callbacks
+
+  @impl Wtransport.StreamHandler
+  def handle_continue(_continue_arg, %Stream{} = _stream, state) do
+    {:noreply, state}
+  end
+
+  @impl Wtransport.StreamHandler
+  def handle_info(_msg, %Stream{} = _stream, state) do
+    {:noreply, state}
+  end
+
+  @impl Wtransport.StreamHandler
+  def handle_call(request, _from, %Stream{} = _stream, state) do
+    {:reply, request, state}
+  end
+
+  @impl Wtransport.StreamHandler
+  def handle_cast(_request, %Stream{} = _stream, state) do
+    {:noreply, state}
   end
 end

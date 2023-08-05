@@ -86,7 +86,7 @@ defmodule MyApp.ConnectionHandler do
 
   @impl Wtransport.ConnectionHandler
   def handle_datagram(dgram, %Wtransport.Connection{} = connection, state) do
-    :ok = Connection.send_datagram(connection, dgram)
+    :ok = Wtransport.Connection.send_datagram(connection, dgram)
 
     {:continue, state}
   end
@@ -110,7 +110,7 @@ defmodule MyApp.StreamHandler do
   @impl Wtransport.StreamHandler
   def handle_data(data, %Wtransport.Stream{} = stream, state) do
     if stream.stream_type == :bi do
-      :ok = Stream.send(stream, data)
+      :ok = Wtransport.Stream.send(stream, data)
     end
 
     {:continue, state}
