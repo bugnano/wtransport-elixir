@@ -88,7 +88,7 @@ fn load(env: Env, _term: Term) -> bool {
 
 fn init_logging() {
     let env_filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::DEBUG.into())
+        .with_default_directive(LevelFilter::OFF.into())
         .from_env_lossy();
 
     tracing_subscriber::fmt()
@@ -369,7 +369,7 @@ async fn handle_connection_impl(
             }
             Some(request) = request_rx.recv() => {
                 if let Some(false) = handle_request(&connection, request) {
-                    info!("Handled pid crashed (1)");
+                    info!("Handled pid crashed");
                     return Ok(());
                 }
             }

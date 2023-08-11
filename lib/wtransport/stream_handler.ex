@@ -36,8 +36,6 @@ defmodule Wtransport.StreamHandler do
 
   defmacro __using__(_opts) do
     quote location: :keep do
-      require Logger
-
       @behaviour Wtransport.StreamHandler
 
       # Default behaviour
@@ -74,6 +72,8 @@ defmodule Wtransport.StreamHandler do
       defoverridable Wtransport.StreamHandler
 
       use GenServer, restart: :temporary
+
+      require Logger
 
       # Client
 

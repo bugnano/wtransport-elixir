@@ -59,12 +59,6 @@ defmodule Wtransport.Runtime do
   end
 
   @impl true
-  def handle_call(:pop, _from, state) do
-    [to_caller | new_state] = state
-    {:reply, to_caller, new_state}
-  end
-
-  @impl true
   def handle_info({:session_request, %SessionRequest{} = request}, state) do
     Logger.debug(":session_request")
 
