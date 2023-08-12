@@ -122,6 +122,17 @@ end
 
 Wtransport comes with a simple echo server to serve as an example;
 it can be found in the `examples/wtransport_echo` folder of this project.
+Before starting it, change the `runtime.exs` file to point to the correct
+certificate paths, and run it with:
+
+```bash
+mix run --no-halt
+```
+
+After the server has been started, you can test it by pointing your browser to
+https://webtransport.day/
+and connect to the URL `https://localhost:4433`
+(or `https://[::1]:4433` if the server is listening on IPv6 only).
 
 ## License
 
