@@ -136,4 +136,8 @@ and connect to the URL `https://localhost:4433`
 
 ## License
 
-MPL-2.0
+Everything in this repository except for the files in the `examples/wtransport_echo` directory and its subdirectories,
+is licensed under the MPL-2.0
+
+The files under the `examples/wtransport_echo` directory and its subdirectories,
+are licensed under the Unlicense
