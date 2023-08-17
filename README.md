@@ -71,7 +71,7 @@ to the `Wtransport.Supervisor`.
 
 ### ConnectionHandler
 
-The `WTransport.ConnectionHandler` behaviour defines the interface that Wtransport uses to pass `Wtransport.Connection`s up to the application level;
+The `Wtransport.ConnectionHandler` behaviour defines the interface that Wtransport uses to pass `Wtransport.Connection`s up to the application level;
 it is used to handle:
 
 - Session requests (via the `handle_session` callback)
@@ -95,7 +95,7 @@ end
 
 ### StreamHandler
 
-The `WTransport.StreamHandler` behaviour defines the interface that Wtransport uses to pass `Wtransport.Stream`s up to the application level;
+The `Wtransport.StreamHandler` behaviour defines the interface that Wtransport uses to pass `Wtransport.Stream`s up to the application level;
 it is used to handle:
 
 - Stream requests (via the `handle_stream` callback)
