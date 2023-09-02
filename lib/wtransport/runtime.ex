@@ -33,7 +33,7 @@ defmodule Wtransport.Runtime do
     certfile = Keyword.fetch!(wtransport_options, :certfile)
     keyfile = Keyword.fetch!(wtransport_options, :keyfile)
     connection_handler = Keyword.fetch!(wtransport_options, :connection_handler)
-    stream_handler = Keyword.fetch!(wtransport_options, :stream_handler)
+    stream_handler = Keyword.get(wtransport_options, :stream_handler)
 
     Logger.debug("Starting the wtransport runtime #{inspect(wtransport_options)}")
     {:ok, runtime} = Wtransport.Native.start_runtime(self(), host, port, certfile, keyfile)

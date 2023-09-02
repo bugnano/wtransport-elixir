@@ -202,11 +202,15 @@ defmodule Wtransport.ConnectionHandler do
           ) do
         Logger.debug(":stream_request")
 
-        {:ok, _pid} =
-          DynamicSupervisor.start_child(
-            runtime_state.supervisor_pid,
-            {runtime_state.stream_handler, {connection, request, state, self()}}
-          )
+        if runtime_state.stream_handler != nil do
+          {:ok, _pid} =
+            DynamicSupervisor.start_child(
+              runtime_state.supervisor_pid,
+              {runtime_state.stream_handler, {connection, request, state, self()}}
+            )
+        else
+          {:ok, {}} = Wtransport.Native.reply_request(request.request_tx, :error, self())
+        end
 
         {:noreply, {connection, runtime_state, state}}
       end
