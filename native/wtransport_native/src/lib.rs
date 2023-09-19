@@ -1,4 +1,6 @@
-use rustler::{Atom, Encoder, Env, LocalPid, NifStruct, OwnedEnv, ResourceArc, Term};
+use rustler::{
+    Atom, Binary, Encoder, Env, LocalPid, NifStruct, OwnedBinary, OwnedEnv, ResourceArc, Term,
+};
 use std::collections::HashMap;
 use std::error::Error;
 use std::net::ToSocketAddrs;
@@ -40,7 +42,7 @@ mod atoms {
 
 struct XShutdownSender(tokio::sync::broadcast::Sender<()>);
 struct XRequestSender(tokio::sync::mpsc::Sender<(Atom, LocalPid)>);
-struct XDataSender(tokio::sync::mpsc::Sender<String>);
+struct XDataSender(tokio::sync::mpsc::Sender<OwnedBinary>);
 
 #[derive(NifStruct)]
 #[module = "Wtransport.Runtime"]
@@ -150,7 +152,7 @@ fn start_runtime_impl(
     let certificate = Certificate::load(certfile, keyfile)?;
 
     let config = ServerConfig::builder()
-        .with_bind_address(bind_address)
+        .with_bind_address(bind_address, false)
         .with_certificate(certificate)
         .keep_alive_interval(Some(Duration::from_secs(3)))
         .build();
@@ -345,7 +347,7 @@ async fn handle_connection_impl(
             }
             dgram = connection.receive_datagram() => {
                 let dgram = dgram?;
-                let str_data = std::str::from_utf8(&dgram)?;
+                let str_data = unsafe { std::str::from_utf8_unchecked(&dgram) };
 
                 msg_env.send_and_clear(&pid, |env| {
                     (
@@ -365,7 +367,7 @@ async fn handle_connection_impl(
                 return Ok(());
             }
             Some(dgram) = send_dgram_rx.recv() => {
-                connection.send_datagram(dgram)?;
+                connection.send_datagram(dgram.as_slice())?;
             }
             Some(request) = request_rx.recv() => {
                 if let Some(false) = handle_request(&connection, request) {
@@ -473,7 +475,7 @@ async fn handle_stream_impl(
     mut send_stream: Option<SendStream>,
     mut recv_stream: RecvStream,
     mut request_rx: tokio::sync::mpsc::Receiver<(Atom, LocalPid)>,
-    mut write_all_rx: tokio::sync::mpsc::Receiver<String>,
+    mut write_all_rx: tokio::sync::mpsc::Receiver<OwnedBinary>,
     result: Atom,
     pid: LocalPid,
 ) -> Result<(), Box<dyn Error>> {
@@ -491,7 +493,7 @@ async fn handle_stream_impl(
         tokio::select! {
             bytes_read = recv_stream.read(&mut buffer), if recv_stream_open => {
                 if let Some(bytes_read) = bytes_read? {
-                    let str_data = std::str::from_utf8(&buffer[..bytes_read])?;
+                    let str_data = unsafe { std::str::from_utf8_unchecked(&buffer[..bytes_read]) };
 
                     msg_env.send_and_clear(&pid, |env| {
                         (
@@ -512,7 +514,7 @@ async fn handle_stream_impl(
             }
             Some(data) = write_all_rx.recv() => {
                 if let Some(stream) = send_stream.as_mut() {
-                    stream.write_all(data.as_bytes()).await?;
+                    stream.write_all(data.as_slice()).await?;
                 }
             }
             Some((request, _request_pid)) = request_rx.recv() => {
@@ -566,12 +568,12 @@ fn reply_request(
 }
 
 #[rustler::nif]
-fn send_data(tx_channel: ResourceArc<XDataSender>, data: String) -> Result<(), String> {
+fn send_data(tx_channel: ResourceArc<XDataSender>, data: Binary) -> Result<(), String> {
     trace!("send_data()");
 
     let now = std::time::Instant::now();
 
-    match tx_channel.0.blocking_send(data) {
+    match tx_channel.0.blocking_send(data.to_owned().unwrap()) {
         Ok(_) => {
             let elapsed_time = now.elapsed();
             trace!("elapsed_time (send_data): {:?}", elapsed_time);
@@ -583,6 +585,6 @@ fn send_data(tx_channel: ResourceArc<XDataSender>, data: String) -> Result<(), S
 
 rustler::init!(
     "Elixir.Wtransport.Native",
-    [start_runtime, stop_runtime, reply_request, send_data,],
+    [start_runtime, stop_runtime, reply_request, send_data],
     load = load
 );
