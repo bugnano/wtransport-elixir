@@ -3,7 +3,9 @@ use rustler::{
 };
 use std::collections::HashMap;
 use std::error::Error;
-use std::net::ToSocketAddrs;
+use std::io;
+use std::io::ErrorKind;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 use tracing::debug;
 use tracing::error;
@@ -13,6 +15,7 @@ use tracing::trace;
 use tracing::Instrument;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::EnvFilter;
+use wtransport::endpoint::endpoint_side::Server;
 use wtransport::endpoint::{IncomingSession, SessionRequest};
 use wtransport::stream::{RecvStream, SendStream};
 use wtransport::tls::Certificate;
@@ -105,8 +108,8 @@ fn start_runtime(
     pid: LocalPid,
     host: &str,
     port: u16,
-    certfile: &str,
-    keyfile: &str,
+    certfile: String,
+    keyfile: String,
 ) -> Result<NifRuntime, String> {
     debug!(
         "start_runtime(pid: {:?}, host: {:?}, port: {:?}, certfile: {:?}, keyfile: {:?})",
@@ -137,25 +140,13 @@ fn start_runtime_impl(
     pid: LocalPid,
     host: &str,
     port: u16,
-    certfile: &str,
-    keyfile: &str,
+    certfile: String,
+    keyfile: String,
 ) -> Result<NifRuntime, Box<dyn Error>> {
     let (tx, rx) = std::sync::mpsc::channel();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
 
-    let mut addrs_iter = (host, port).to_socket_addrs()?;
-
-    let Some(bind_address) = addrs_iter.next() else {
-        return Err("bind_address is empty".into());
-    };
-
-    let certificate = Certificate::load(certfile, keyfile)?;
-
-    let config = ServerConfig::builder()
-        .with_bind_address(bind_address, false)
-        .with_certificate(certificate)
-        .keep_alive_interval(Some(Duration::from_secs(3)))
-        .build();
+    let addrs_iter = (host, port).to_socket_addrs()?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -164,12 +155,67 @@ fn start_runtime_impl(
     let shutdown_tx2 = shutdown_tx.clone();
     std::thread::spawn(move || {
         runtime.block_on(async {
-            match server_loop(pid, config, tx.clone(), shutdown_tx2, shutdown_rx).await {
-                Ok(()) => (),
+            let endpoints = match addrs_iter
+                .map(|bind_address| {
+                    debug!("bind_address: {:?}", bind_address);
+
+                    let certificate = match Certificate::load(&certfile, &keyfile) {
+                        Ok(cert) => cert,
+                        Err(error) => {
+                            return Err(io::Error::new(ErrorKind::Other, error.to_string()))
+                        }
+                    };
+
+                    let config = ServerConfig::builder()
+                        .with_bind_address(bind_address)
+                        .with_certificate(certificate)
+                        .keep_alive_interval(Some(Duration::from_secs(3)))
+                        .build();
+
+                    Ok((Endpoint::server(config)?, bind_address))
+                })
+                .collect::<Result<Vec<(Endpoint<Server>, SocketAddr)>, io::Error>>()
+            {
+                Ok(result) => result,
                 Err(error) => {
                     let _ = tx.send(Err(error.to_string()));
+                    return;
                 }
             };
+
+            if endpoints.is_empty() {
+                let _ = tx.send(Err("bind_address is empty".into()));
+                return;
+            }
+
+            if tx.send(Ok(())).is_ok() {
+                info!("Server started");
+
+                tokio::select! {
+                    _ = async {
+                        for id in 0.. {
+                            let (incoming_session, idx, _remaining_futures) = futures::future::select_all(
+                                endpoints
+                                    .iter()
+                                    .map(|(endpoint, _bind_address)| Box::pin(endpoint.accept())),
+                            )
+                            .await;
+
+                            let bind_address = endpoints[idx].1;
+
+                            debug!("Connection accepted ({})", bind_address);
+
+                            tokio::spawn(
+                                handle_connection(pid, shutdown_tx2.clone(), incoming_session)
+                                    .instrument(info_span!("Connection", id)),
+                            );
+                        }
+                    } => {}
+                    _ = shutdown_rx.recv() => {
+                        info!("Server stopped");
+                    }
+                };
+            }
         });
     });
 
@@ -178,38 +224,6 @@ fn start_runtime_impl(
     Ok(NifRuntime {
         shutdown_tx: ResourceArc::new(XShutdownSender(shutdown_tx)),
     })
-}
-
-async fn server_loop(
-    pid: LocalPid,
-    config: ServerConfig,
-    tx: std::sync::mpsc::Sender<Result<(), String>>,
-    shutdown_tx: tokio::sync::broadcast::Sender<()>,
-    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-) -> Result<(), Box<dyn Error>> {
-    let server = Endpoint::server(config)?;
-
-    info!("Server started");
-
-    tx.send(Ok(()))?;
-
-    tokio::select! {
-        _ = async {
-            for id in 0.. {
-                let incoming_session = server.accept().await;
-                debug!("Connection accepted");
-                tokio::spawn(
-                    handle_connection(pid, shutdown_tx.clone(), incoming_session)
-                        .instrument(info_span!("Connection", id)),
-                );
-            }
-        } => {}
-        _ = shutdown_rx.recv() => {
-            info!("Server stopped");
-        }
-    }
-
-    Ok(())
 }
 
 async fn handle_connection(
@@ -573,7 +587,12 @@ fn send_data(tx_channel: ResourceArc<XDataSender>, data: Binary) -> Result<(), S
 
     let now = std::time::Instant::now();
 
-    match tx_channel.0.blocking_send(data.to_owned().unwrap()) {
+    let owned_data = match data.to_owned() {
+        Some(owned) => owned,
+        None => return Err("Error creating OwnedBinary".to_string()),
+    };
+
+    match tx_channel.0.blocking_send(owned_data) {
         Ok(_) => {
             let elapsed_time = now.elapsed();
             trace!("elapsed_time (send_data): {:?}", elapsed_time);
