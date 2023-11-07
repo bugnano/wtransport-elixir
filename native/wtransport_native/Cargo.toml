@@ -11,10 +11,11 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rustler = "0.29"
+crossbeam-channel = "0.5"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
-wtransport = "0.1"
-#wtransport = { git = "https://github.com/BiagioFesta/wtransport.git" }
+#wtransport = "0.1"
+wtransport = { git = "https://github.com/BiagioFesta/wtransport.git" }
 

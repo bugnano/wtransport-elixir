@@ -1,27 +1,23 @@
+use futures::future::select_all;
 use rustler::{
     Atom, Binary, Encoder, Env, LocalPid, NifStruct, OwnedBinary, OwnedEnv, ResourceArc, Term,
 };
-use std::collections::HashMap;
-use std::error::Error;
-use std::io;
-use std::io::ErrorKind;
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::time::Duration;
-use tracing::debug;
-use tracing::error;
-use tracing::info;
-use tracing::info_span;
-use tracing::trace;
-use tracing::Instrument;
-use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::EnvFilter;
-use wtransport::endpoint::endpoint_side::Server;
-use wtransport::endpoint::{IncomingSession, SessionRequest};
-use wtransport::stream::{RecvStream, SendStream};
-use wtransport::tls::Certificate;
-use wtransport::Connection;
-use wtransport::Endpoint;
-use wtransport::ServerConfig;
+use std::{
+    collections::HashMap,
+    error::Error,
+    io,
+    net::{SocketAddr, ToSocketAddrs},
+    time::Duration,
+};
+use tokio::sync::{broadcast, mpsc};
+use tracing::{debug, error, info, info_span, trace, Instrument};
+use tracing_subscriber::{filter::LevelFilter, EnvFilter};
+use wtransport::{
+    endpoint::{endpoint_side::Server, IncomingSession, SessionRequest},
+    stream::{RecvStream, SendStream},
+    tls::Certificate,
+    Connection, Endpoint, ServerConfig,
+};
 
 mod atoms {
     rustler::atoms! {
@@ -43,9 +39,9 @@ mod atoms {
     }
 }
 
-struct XShutdownSender(tokio::sync::broadcast::Sender<()>);
-struct XRequestSender(tokio::sync::mpsc::Sender<(Atom, LocalPid)>);
-struct XDataSender(tokio::sync::mpsc::Sender<OwnedBinary>);
+struct XShutdownSender(broadcast::Sender<()>);
+struct XRequestSender(mpsc::Sender<(Atom, LocalPid)>);
+struct XDataSender(mpsc::Sender<OwnedBinary>);
 
 #[derive(NifStruct)]
 #[module = "Wtransport.Runtime"]
@@ -143,8 +139,8 @@ fn start_runtime_impl(
     certfile: String,
     keyfile: String,
 ) -> Result<NifRuntime, Box<dyn Error>> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
 
     let addrs_iter = (host, port).to_socket_addrs()?;
 
@@ -155,20 +151,21 @@ fn start_runtime_impl(
     let shutdown_tx2 = shutdown_tx.clone();
     std::thread::spawn(move || {
         runtime.block_on(async {
+            let certificate = match Certificate::load(&certfile, &keyfile).await {
+                Ok(cert) => cert,
+                Err(error) => {
+                    let _ = tx.send(Err(error.to_string()));
+                    return;
+                }
+            };
+
             let endpoints = match addrs_iter
                 .map(|bind_address| {
                     debug!("bind_address: {:?}", bind_address);
 
-                    let certificate = match Certificate::load(&certfile, &keyfile) {
-                        Ok(cert) => cert,
-                        Err(error) => {
-                            return Err(io::Error::new(ErrorKind::Other, error.to_string()))
-                        }
-                    };
-
                     let config = ServerConfig::builder()
                         .with_bind_address(bind_address)
-                        .with_certificate(certificate)
+                        .with_certificate(certificate.clone())
                         .keep_alive_interval(Some(Duration::from_secs(3)))
                         .build();
 
@@ -194,7 +191,7 @@ fn start_runtime_impl(
                 tokio::select! {
                     _ = async {
                         for id in 0.. {
-                            let (incoming_session, idx, _remaining_futures) = futures::future::select_all(
+                            let (incoming_session, idx, _remaining_futures) = select_all(
                                 endpoints
                                     .iter()
                                     .map(|(endpoint, _bind_address)| Box::pin(endpoint.accept())),
@@ -228,7 +225,7 @@ fn start_runtime_impl(
 
 async fn handle_connection(
     runtime_pid: LocalPid,
-    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    shutdown_tx: broadcast::Sender<()>,
     incoming_session: IncomingSession,
 ) {
     info!("Waiting for session request...");
@@ -252,7 +249,7 @@ async fn handle_connection(
 
     info!("New session: Authority: '{}', Path: '{}'", authority, path);
 
-    let (request_tx, mut request_rx) = tokio::sync::mpsc::channel(1);
+    let (request_tx, mut request_rx) = mpsc::channel(1);
 
     let mut msg_env = OwnedEnv::new();
     msg_env.send_and_clear(&runtime_pid, |env| {
@@ -282,9 +279,9 @@ async fn handle_connection(
 }
 
 async fn handle_connection_impl(
-    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    shutdown_tx: broadcast::Sender<()>,
     session_request: SessionRequest,
-    mut request_rx: tokio::sync::mpsc::Receiver<(Atom, LocalPid)>,
+    mut request_rx: mpsc::Receiver<(Atom, LocalPid)>,
     result: Atom,
     pid: LocalPid,
 ) -> Result<(), Box<dyn Error>> {
@@ -302,7 +299,7 @@ async fn handle_connection_impl(
 
     let connection = session_request.accept().await?;
 
-    let (send_dgram_tx, mut send_dgram_rx) = tokio::sync::mpsc::channel(1);
+    let (send_dgram_tx, mut send_dgram_rx) = mpsc::channel(1);
 
     msg_env.send_and_clear(&pid, |env| {
         (
@@ -436,12 +433,12 @@ fn handle_request(connection: &Connection, (request, pid): (Atom, LocalPid)) -> 
 
 async fn handle_stream(
     socket_pid: LocalPid,
-    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    shutdown_tx: broadcast::Sender<()>,
     send_stream: Option<SendStream>,
     recv_stream: RecvStream,
 ) {
-    let (request_tx, mut request_rx) = tokio::sync::mpsc::channel(1);
-    let (write_all_tx, write_all_rx) = tokio::sync::mpsc::channel(1);
+    let (request_tx, mut request_rx) = mpsc::channel(1);
+    let (write_all_tx, write_all_rx) = mpsc::channel(1);
 
     let mut msg_env = OwnedEnv::new();
     msg_env.send_and_clear(&socket_pid, |env| {
@@ -485,11 +482,11 @@ async fn handle_stream(
 }
 
 async fn handle_stream_impl(
-    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    shutdown_tx: broadcast::Sender<()>,
     mut send_stream: Option<SendStream>,
     mut recv_stream: RecvStream,
-    mut request_rx: tokio::sync::mpsc::Receiver<(Atom, LocalPid)>,
-    mut write_all_rx: tokio::sync::mpsc::Receiver<OwnedBinary>,
+    mut request_rx: mpsc::Receiver<(Atom, LocalPid)>,
+    mut write_all_rx: mpsc::Receiver<OwnedBinary>,
     result: Atom,
     pid: LocalPid,
 ) -> Result<(), Box<dyn Error>> {
