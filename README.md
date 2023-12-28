@@ -20,7 +20,6 @@ The Wtransport Elixir bindings implement the server part of WTransport with an A
 - Erlang/OTP (version 24 or greater)
 - Elixir (version 1.12 or greater)
 - The Rust compiler + Cargo (WTransport is written in Rust)
-- The Clang C compiler + CMake (WTransport depends on [ls-qpack](https://github.com/litespeedtech/ls-qpack), which is written in C)
 
 You'll also need TLS certificate files, even for local development, as HTTP/3 mandates the use of TLS.
 
