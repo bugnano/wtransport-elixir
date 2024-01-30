@@ -70,6 +70,7 @@ struct NifConnectionRequest {
 #[derive(NifStruct)]
 #[module = "Wtransport.StreamRequest"]
 struct NifStreamRequest {
+    recv_stream_id: u64,
     stream_type: Atom,
     request_tx: ResourceArc<XRequestSender>,
     write_all_tx: Option<ResourceArc<XDataSender>>,
@@ -446,11 +447,13 @@ async fn handle_stream(
             atoms::stream_request(),
             match send_stream {
                 Some(_) => NifStreamRequest {
+                    recv_stream_id: recv_stream.id().into_u64(),
                     stream_type: atoms::bi(),
                     request_tx: ResourceArc::new(XRequestSender(request_tx)),
                     write_all_tx: Some(ResourceArc::new(XDataSender(write_all_tx))),
                 },
                 None => NifStreamRequest {
+                    recv_stream_id: recv_stream.id().into_u64(),
                     stream_type: atoms::uni(),
                     request_tx: ResourceArc::new(XRequestSender(request_tx)),
                     write_all_tx: None,
