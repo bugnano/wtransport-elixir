@@ -1,5 +1,6 @@
 defmodule Wtransport.Stream do
   defstruct [
+    :recv_stream_id,
     :stream_type,
     :connection,
     :request_tx,
