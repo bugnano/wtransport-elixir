@@ -15,8 +15,7 @@ use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 use wtransport::{
     endpoint::{endpoint_side::Server, IncomingSession, SessionRequest},
     stream::{RecvStream, SendStream},
-    tls::Certificate,
-    Connection, Endpoint, ServerConfig,
+    Connection, Endpoint, Identity, ServerConfig,
 };
 
 mod atoms {
@@ -151,8 +150,8 @@ fn start_runtime_impl(
     let shutdown_tx2 = shutdown_tx.clone();
     std::thread::spawn(move || {
         runtime.block_on(async {
-            let certificate = match Certificate::load(&certfile, &keyfile).await {
-                Ok(cert) => cert,
+            let identity = match Identity::load_pemfiles(&certfile, &keyfile).await {
+                Ok(identity) => identity,
                 Err(error) => {
                     let _ = tx.send(Err(error.to_string()));
                     return;
@@ -165,7 +164,7 @@ fn start_runtime_impl(
 
                     let config = ServerConfig::builder()
                         .with_bind_address(bind_address)
-                        .with_certificate(certificate.clone())
+                        .with_identity(&identity)
                         .keep_alive_interval(Some(Duration::from_secs(3)))
                         .build();
 
@@ -252,7 +251,7 @@ async fn handle_connection(
     let (request_tx, mut request_rx) = mpsc::channel(1);
 
     let mut msg_env = OwnedEnv::new();
-    msg_env.send_and_clear(&runtime_pid, |env| {
+    let _ = msg_env.send_and_clear(&runtime_pid, |env| {
         (
             atoms::session_request(),
             NifSessionRequest {
@@ -272,7 +271,8 @@ async fn handle_connection(
     match handle_connection_impl(shutdown_tx, session_request, request_rx, result, pid).await {
         Ok(()) => (),
         Err(error) => {
-            msg_env.send_and_clear(&pid, |env| (atoms::error(), error.to_string()).encode(env));
+            let _ =
+                msg_env.send_and_clear(&pid, |env| (atoms::error(), error.to_string()).encode(env));
             error!("{:?}", error);
         }
     }
@@ -301,7 +301,7 @@ async fn handle_connection_impl(
 
     let (send_dgram_tx, mut send_dgram_rx) = mpsc::channel(1);
 
-    msg_env.send_and_clear(&pid, |env| {
+    let _ = msg_env.send_and_clear(&pid, |env| {
         (
             atoms::connection_request(),
             NifConnectionRequest {
@@ -360,7 +360,7 @@ async fn handle_connection_impl(
                 let dgram = dgram?;
                 let str_data = unsafe { std::str::from_utf8_unchecked(&dgram) };
 
-                msg_env.send_and_clear(&pid, |env| {
+                let _ = msg_env.send_and_clear(&pid, |env| {
                     (
                         atoms::datagram_received(),
                         str_data,
@@ -371,7 +371,7 @@ async fn handle_connection_impl(
                 trace!("Received (dgram) '{str_data}' from client");
             }
             _ = connection.closed() => {
-                msg_env.send_and_clear(&pid, |env| atoms::conn_closed().encode(env));
+                let _ = msg_env.send_and_clear(&pid, |env| atoms::conn_closed().encode(env));
 
                 debug!("Connection closed");
 
@@ -408,7 +408,7 @@ fn handle_request(connection: &Connection, (request, pid): (Atom, LocalPid)) -> 
     } else if request == atoms::remote_address() {
         let remote_address = connection.remote_address();
 
-        msg_env.send_and_clear(&pid, |env| {
+        let _ = msg_env.send_and_clear(&pid, |env| {
             (
                 atoms::remote_address(),
                 remote_address.ip().to_string(),
@@ -419,13 +419,13 @@ fn handle_request(connection: &Connection, (request, pid): (Atom, LocalPid)) -> 
     } else if request == atoms::max_datagram_size() {
         let max_datagram_size = connection.max_datagram_size();
 
-        msg_env.send_and_clear(&pid, |env| {
+        let _ = msg_env.send_and_clear(&pid, |env| {
             (atoms::max_datagram_size(), max_datagram_size).encode(env)
         });
     } else if request == atoms::rtt() {
         let rtt = connection.rtt();
 
-        msg_env.send_and_clear(&pid, |env| (atoms::rtt(), rtt.as_secs_f64()).encode(env));
+        let _ = msg_env.send_and_clear(&pid, |env| (atoms::rtt(), rtt.as_secs_f64()).encode(env));
     }
 
     None
@@ -441,7 +441,7 @@ async fn handle_stream(
     let (write_all_tx, write_all_rx) = mpsc::channel(1);
 
     let mut msg_env = OwnedEnv::new();
-    msg_env.send_and_clear(&socket_pid, |env| {
+    let _ = msg_env.send_and_clear(&socket_pid, |env| {
         (
             atoms::stream_request(),
             match send_stream {
@@ -475,7 +475,8 @@ async fn handle_stream(
     {
         Ok(()) => (),
         Err(error) => {
-            msg_env.send_and_clear(&pid, |env| (atoms::error(), error.to_string()).encode(env));
+            let _ =
+                msg_env.send_and_clear(&pid, |env| (atoms::error(), error.to_string()).encode(env));
             error!("{:?}", error);
         }
     }
@@ -506,7 +507,7 @@ async fn handle_stream_impl(
                 if let Some(bytes_read) = bytes_read? {
                     let str_data = unsafe { std::str::from_utf8_unchecked(&buffer[..bytes_read]) };
 
-                    msg_env.send_and_clear(&pid, |env| {
+                    let _ = msg_env.send_and_clear(&pid, |env| {
                         (
                             atoms::data_received(),
                             str_data,
@@ -518,7 +519,7 @@ async fn handle_stream_impl(
                 } else {
                     recv_stream_open = false;
 
-                    msg_env.send_and_clear(&pid, |env| atoms::stream_closed().encode(env));
+                    let _ = msg_env.send_and_clear(&pid, |env| atoms::stream_closed().encode(env));
 
                     debug!("Receiving end of stream closed");
                 }
