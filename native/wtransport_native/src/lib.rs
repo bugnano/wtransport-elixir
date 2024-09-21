@@ -1,6 +1,7 @@
 use futures::future::select_all;
 use rustler::{
-    Atom, Binary, Encoder, Env, LocalPid, NifStruct, OwnedBinary, OwnedEnv, ResourceArc, Term,
+    Atom, Binary, Encoder, Env, LocalPid, NifStruct, OwnedBinary, OwnedEnv, Resource, ResourceArc,
+    Term,
 };
 use std::{
     collections::HashMap,
@@ -42,6 +43,10 @@ struct XShutdownSender(broadcast::Sender<()>);
 struct XRequestSender(mpsc::Sender<(Atom, LocalPid)>);
 struct XDataSender(mpsc::Sender<OwnedBinary>);
 
+impl Resource for XShutdownSender {}
+impl Resource for XRequestSender {}
+impl Resource for XDataSender {}
+
 #[derive(NifStruct)]
 #[module = "Wtransport.Runtime"]
 struct NifRuntime {
@@ -79,11 +84,10 @@ fn load(env: Env, _term: Term) -> bool {
 
     debug!("load(term: {:?})", _term);
 
-    rustler::resource!(XShutdownSender, env);
-    rustler::resource!(XRequestSender, env);
-    rustler::resource!(XDataSender, env);
-
-    true
+    env.register::<XShutdownSender>()
+        .and_then(|_| env.register::<XRequestSender>())
+        .and_then(|_| env.register::<XDataSender>())
+        .is_ok()
 }
 
 fn init_logging() {
@@ -504,24 +508,25 @@ async fn handle_stream_impl(
     loop {
         tokio::select! {
             bytes_read = recv_stream.read(&mut buffer), if recv_stream_open => {
-                if let Some(bytes_read) = bytes_read? {
-                    let str_data = unsafe { std::str::from_utf8_unchecked(&buffer[..bytes_read]) };
+                match bytes_read? {
+                    Some(bytes_read) => {
+                        let str_data =
+                            unsafe { std::str::from_utf8_unchecked(&buffer[..bytes_read]) };
 
-                    let _ = msg_env.send_and_clear(&pid, |env| {
-                        (
-                            atoms::data_received(),
-                            str_data,
-                        )
-                            .encode(env)
-                    });
+                        let _ = msg_env.send_and_clear(&pid, |env| {
+                            (atoms::data_received(), str_data).encode(env)
+                        });
 
-                    trace!("Received '{str_data}' from client");
-                } else {
-                    recv_stream_open = false;
+                        trace!("Received '{str_data}' from client");
+                    }
+                    None => {
+                        recv_stream_open = false;
 
-                    let _ = msg_env.send_and_clear(&pid, |env| atoms::stream_closed().encode(env));
+                        let _ =
+                            msg_env.send_and_clear(&pid, |env| atoms::stream_closed().encode(env));
 
-                    debug!("Receiving end of stream closed");
+                        debug!("Receiving end of stream closed");
+                    }
                 }
             }
             Some(data) = write_all_rx.recv() => {
@@ -600,8 +605,4 @@ fn send_data(tx_channel: ResourceArc<XDataSender>, data: Binary) -> Result<(), S
     }
 }
 
-rustler::init!(
-    "Elixir.Wtransport.Native",
-    [start_runtime, stop_runtime, reply_request, send_data],
-    load = load
-);
+rustler::init!("Elixir.Wtransport.Native", load = load);
