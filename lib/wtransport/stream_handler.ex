@@ -47,12 +47,12 @@ defmodule Wtransport.StreamHandler do
       def init({%Connection{} = connection, %StreamRequest{} = request, state, conn_pid}) do
         Logger.debug("init")
 
-        Process.monitor(conn_pid)
+        monitor_ref = Process.monitor(conn_pid)
 
         stream =
           struct(
             Stream,
-            %{connection: connection}
+            %{connection: connection, monitor_ref: monitor_ref}
             |> Map.merge(Map.from_struct(request))
           )
 
@@ -88,7 +88,11 @@ defmodule Wtransport.StreamHandler do
       end
 
       @impl true
-      def handle_info({:DOWN, _ref, :process, _object, _reason}, {%Stream{} = stream, state}) do
+      def handle_info(
+            {:DOWN, ref, :process, _object, _reason},
+            {%Stream{monitor_ref: monitor_ref} = stream, state}
+          )
+          when ref == monitor_ref do
         Logger.debug(":DOWN")
 
         handle_error("pid_crashed", stream, state)

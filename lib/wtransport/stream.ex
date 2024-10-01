@@ -6,6 +6,7 @@ defmodule Wtransport.Stream do
   typedstruct do
     field(:stream_type, :bi | :uni, enforce: true)
     field(:connection, Connection.t(), enforce: true)
+    field(:monitor_ref, reference(), enforce: true)
     field(:request_tx, reference(), enforce: true)
     field(:write_all_tx, reference(), enforce: true)
   end
