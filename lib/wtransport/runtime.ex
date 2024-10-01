@@ -1,12 +1,26 @@
 defmodule Wtransport.Runtime do
   use GenServer
+  use TypedStruct
 
   require Logger
 
+  alias Wtransport.Runtime
   alias Wtransport.SessionRequest
 
-  @enforce_keys [:shutdown_tx]
-  defstruct [:shutdown_tx]
+  typedstruct do
+    field(:shutdown_tx, reference(), enforce: true)
+  end
+
+  defmodule State do
+    use TypedStruct
+
+    typedstruct do
+      field(:runtime, Runtime.t(), enforce: true)
+      field(:connection_handler, atom(), enforce: true)
+      field(:stream_handler, atom())
+      field(:supervisor_pid, pid(), enforce: true)
+    end
+  end
 
   # Client
 
@@ -39,7 +53,7 @@ defmodule Wtransport.Runtime do
     {:ok, runtime} = Wtransport.Native.start_runtime(self(), host, port, certfile, keyfile)
     Logger.info("Started the wtransport runtime #{inspect(wtransport_options)}")
 
-    initial_state = %{
+    initial_state = %State{
       runtime: runtime,
       connection_handler: connection_handler,
       stream_handler: stream_handler,
@@ -50,7 +64,7 @@ defmodule Wtransport.Runtime do
   end
 
   @impl true
-  def terminate(_reason, state) do
+  def terminate(_reason, %State{} = state) do
     Logger.debug("terminate")
 
     Wtransport.Native.stop_runtime(state.runtime)
@@ -59,7 +73,7 @@ defmodule Wtransport.Runtime do
   end
 
   @impl true
-  def handle_info({:session_request, %SessionRequest{} = request}, state) do
+  def handle_info({:session_request, %SessionRequest{} = request}, %State{} = state) do
     Logger.debug(":session_request")
 
     {:ok, _pid} =

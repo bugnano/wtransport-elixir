@@ -3,42 +3,18 @@ defmodule Wtransport.StreamHandler do
   alias Wtransport.StreamRequest
   alias Wtransport.Stream
 
-  @callback handle_stream(stream :: Stream.t(), state :: term()) :: term()
+  @callback handle_stream(stream :: Stream.t(), state :: term()) :: {:continue, term()} | :close
 
-  @callback handle_data(
-              data :: String.t(),
-              stream :: Stream.t(),
-              state :: term()
-            ) :: term()
+  @callback handle_data(data :: String.t(), stream :: Stream.t(), state :: term()) ::
+              {:continue, term()} | :close
 
-  @callback handle_close(stream :: Stream.t(), state :: term()) :: term()
+  @callback handle_close(stream :: Stream.t(), state :: term()) :: :ok
 
-  @callback handle_error(
-              reason :: String.t(),
-              stream :: Stream.t(),
-              state :: term()
-            ) :: term()
-
-  @callback handle_continue(continue_arg :: term(), stream :: Stream.t(), state :: term()) ::
-              term()
-
-  @callback handle_info(msg :: term(), stream :: Stream.t(), state :: term()) :: term()
-
-  @callback handle_call(
-              request :: term(),
-              from :: term(),
-              stream :: Stream.t(),
-              state :: term()
-            ) :: term()
-
-  @callback handle_cast(request :: term(), stream :: Stream.t(), state :: term()) ::
-              term()
+  @callback handle_error(reason :: String.t(), stream :: Stream.t(), state :: term()) :: :ok
 
   defmacro __using__(_opts) do
     quote location: :keep do
       @behaviour Wtransport.StreamHandler
-
-      # Default behaviour
 
       @impl Wtransport.StreamHandler
       def handle_stream(%Stream{} = _stream, state), do: {:continue, state}
@@ -52,22 +28,6 @@ defmodule Wtransport.StreamHandler do
 
       @impl Wtransport.StreamHandler
       def handle_error(_reason, %Stream{} = _stream, _state), do: :ok
-
-      @impl Wtransport.StreamHandler
-      def handle_continue(_continue_arg, %Stream{} = _stream, _state),
-        do: raise("handle_continue/3 not implemented")
-
-      @impl Wtransport.StreamHandler
-      def handle_info(_msg, %Stream{} = _stream, _state),
-        do: raise("handle_info/3 not implemented")
-
-      @impl Wtransport.StreamHandler
-      def handle_call(_request, _from, %Stream{} = _stream, _state),
-        do: raise("handle_call/4 not implemented")
-
-      @impl Wtransport.StreamHandler
-      def handle_cast(_request, %Stream{} = _stream, _state),
-        do: raise("handle_cast/3 not implemented")
 
       defoverridable Wtransport.StreamHandler
 
@@ -89,9 +49,14 @@ defmodule Wtransport.StreamHandler do
 
         Process.monitor(conn_pid)
 
-        stream = struct(%Stream{connection: connection}, Map.from_struct(request))
+        stream =
+          struct(
+            Stream,
+            %{connection: connection}
+            |> Map.merge(Map.from_struct(request))
+          )
 
-        {:ok, {stream, {request, state}}, {:continue, :stream_request}}
+        {:ok, {stream, state}, {:continue, :stream_request}}
       end
 
       @impl true
@@ -106,36 +71,19 @@ defmodule Wtransport.StreamHandler do
       end
 
       @impl true
-      def handle_continue(
-            :stream_request,
-            {%Stream{} = stream, {%StreamRequest{} = request, state}}
-          ) do
+      def handle_continue(:stream_request, {%Stream{} = stream, state}) do
         Logger.debug(":stream_request")
 
         case handle_stream(stream, state) do
           {:continue, new_state} ->
-            {:ok, {}} = Wtransport.Native.reply_request(request.request_tx, :ok, self())
+            {:ok, {}} = Wtransport.Native.reply_request(stream.request_tx, :ok, self())
 
             {:noreply, {stream, new_state}}
 
           _ ->
-            {:ok, {}} = Wtransport.Native.reply_request(request.request_tx, :error, self())
+            {:ok, {}} = Wtransport.Native.reply_request(stream.request_tx, :error, self())
 
             {:stop, :normal, {stream, state}}
-        end
-      end
-
-      @impl true
-      def handle_continue(continue_arg, {%Stream{} = stream, state}) do
-        case handle_continue(continue_arg, stream, state) do
-          {:noreply, new_state} ->
-            {:noreply, {stream, new_state}}
-
-          {:noreply, new_state, arg} ->
-            {:noreply, {stream, new_state}, arg}
-
-          {:stop, reason, new_state} ->
-            {:stop, reason, {stream, new_state}}
         end
       end
 
@@ -180,57 +128,6 @@ defmodule Wtransport.StreamHandler do
 
           _ ->
             {:stop, :normal, {stream, state}}
-        end
-      end
-
-      @impl true
-      def handle_info(msg, {%Stream{} = stream, state}) do
-        case handle_info(msg, stream, state) do
-          {:noreply, new_state} ->
-            {:noreply, {stream, new_state}}
-
-          {:noreply, new_state, arg} ->
-            {:noreply, {stream, new_state}, arg}
-
-          {:stop, reason, new_state} ->
-            {:stop, reason, {stream, new_state}}
-        end
-      end
-
-      @impl true
-      def handle_call(request, from, {%Stream{} = stream, state}) do
-        case handle_call(request, from, stream, state) do
-          {:reply, reply, new_state} ->
-            {:reply, reply, {stream, new_state}}
-
-          {:reply, reply, new_state, arg} ->
-            {:reply, reply, {stream, new_state}, arg}
-
-          {:noreply, new_state} ->
-            {:noreply, {stream, new_state}}
-
-          {:noreply, new_state, arg} ->
-            {:noreply, {stream, new_state}, arg}
-
-          {:stop, reason, reply, new_state} ->
-            {:stop, reason, reply, {stream, new_state}}
-
-          {:stop, reason, new_state} ->
-            {:stop, reason, {stream, new_state}}
-        end
-      end
-
-      @impl true
-      def handle_cast(request, {%Stream{} = stream, state}) do
-        case handle_cast(request, stream, state) do
-          {:noreply, new_state} ->
-            {:noreply, {stream, new_state}}
-
-          {:noreply, new_state, arg} ->
-            {:noreply, {stream, new_state}, arg}
-
-          {:stop, reason, new_state} ->
-            {:stop, reason, {stream, new_state}}
         end
       end
     end

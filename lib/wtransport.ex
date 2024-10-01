@@ -1,57 +1,45 @@
 defmodule Wtransport do
   defmodule SessionRequest do
-    @enforce_keys [
-      :authority,
-      :path,
-      :origin,
-      :user_agent,
-      :headers,
-      :request_tx
-    ]
+    use TypedStruct
 
-    defstruct [
-      :authority,
-      :path,
-      :origin,
-      :user_agent,
-      :headers,
-      :request_tx
-    ]
+    typedstruct do
+      field(:authority, String.t(), enforce: true)
+      field(:path, String.t(), enforce: true)
+      field(:origin, String.t(), enforce: true)
+      field(:user_agent, String.t(), enforce: true)
+      field(:headers, %{String.t() => String.t()}, enforce: true)
+      field(:request_tx, reference(), enforce: true)
+    end
   end
 
   defmodule Session do
-    defstruct [
-      :authority,
-      :path,
-      :origin,
-      :user_agent,
-      :headers
-    ]
+    use TypedStruct
+
+    typedstruct do
+      field(:authority, String.t(), enforce: true)
+      field(:path, String.t(), enforce: true)
+      field(:origin, String.t(), enforce: true)
+      field(:user_agent, String.t(), enforce: true)
+      field(:headers, %{String.t() => String.t()}, enforce: true)
+    end
   end
 
   defmodule ConnectionRequest do
-    @enforce_keys [
-      :stable_id,
-      :send_dgram_tx
-    ]
+    use TypedStruct
 
-    defstruct [
-      :stable_id,
-      :send_dgram_tx
-    ]
+    typedstruct do
+      field(:stable_id, non_neg_integer(), enforce: true)
+      field(:send_dgram_tx, reference(), enforce: true)
+    end
   end
 
   defmodule StreamRequest do
-    @enforce_keys [
-      :stream_type,
-      :request_tx,
-      :write_all_tx
-    ]
+    use TypedStruct
 
-    defstruct [
-      :stream_type,
-      :request_tx,
-      :write_all_tx
-    ]
+    typedstruct do
+      field(:stream_type, :bi | :uni, enforce: true)
+      field(:request_tx, reference(), enforce: true)
+      field(:write_all_tx, reference(), enforce: true)
+    end
   end
 end

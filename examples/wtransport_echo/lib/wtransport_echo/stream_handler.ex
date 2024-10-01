@@ -32,25 +32,25 @@ defmodule WtransportEcho.StreamHandler do
     :ok
   end
 
-  # GenServer style callbacks
+  # GenServer callbacks
 
-  @impl Wtransport.StreamHandler
-  def handle_continue(_continue_arg, %Stream{} = _stream, state) do
-    {:noreply, state}
+  @impl true
+  def handle_continue(_continue_arg, {%Stream{} = stream, state}) do
+    {:noreply, {stream, state}}
   end
 
-  @impl Wtransport.StreamHandler
-  def handle_info(_msg, %Stream{} = _stream, state) do
-    {:noreply, state}
+  @impl true
+  def handle_info(_msg, {%Stream{} = stream, state}) do
+    {:noreply, {stream, state}}
   end
 
-  @impl Wtransport.StreamHandler
-  def handle_call(request, _from, %Stream{} = _stream, state) do
-    {:reply, request, state}
+  @impl true
+  def handle_call(request, _from, {%Stream{} = stream, state}) do
+    {:reply, request, {stream, state}}
   end
 
-  @impl Wtransport.StreamHandler
-  def handle_cast(_request, %Stream{} = _stream, state) do
-    {:noreply, state}
+  @impl true
+  def handle_cast(_request, {%Stream{} = stream, state}) do
+    {:noreply, {stream, state}}
   end
 end

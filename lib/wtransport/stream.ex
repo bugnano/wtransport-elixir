@@ -1,10 +1,14 @@
 defmodule Wtransport.Stream do
-  defstruct [
-    :stream_type,
-    :connection,
-    :request_tx,
-    :write_all_tx
-  ]
+  use TypedStruct
+
+  alias Wtransport.Connection
+
+  typedstruct do
+    field(:stream_type, :bi | :uni, enforce: true)
+    field(:connection, Connection.t(), enforce: true)
+    field(:request_tx, reference(), enforce: true)
+    field(:write_all_tx, reference(), enforce: true)
+  end
 
   def send(%__MODULE__{write_all_tx: write_all_tx} = _stream, data)
       when not is_nil(write_all_tx) and is_binary(data) do

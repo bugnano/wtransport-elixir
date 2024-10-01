@@ -35,25 +35,25 @@ defmodule WtransportEcho.ConnectionHandler do
     :ok
   end
 
-  # GenServer style callbacks
+  # GenServer callbacks
 
-  @impl Wtransport.ConnectionHandler
-  def handle_continue(_continue_arg, %Connection{} = _connection, state) do
-    {:noreply, state}
+  @impl true
+  def handle_continue(_continue_arg, {%Connection{} = connection, state}) do
+    {:noreply, {connection, state}}
   end
 
-  @impl Wtransport.ConnectionHandler
-  def handle_info(_msg, %Connection{} = _connection, state) do
-    {:noreply, state}
+  @impl true
+  def handle_info(_msg, {%Connection{} = connection, state}) do
+    {:noreply, {connection, state}}
   end
 
-  @impl Wtransport.ConnectionHandler
-  def handle_call(request, _from, %Connection{} = _connection, state) do
-    {:reply, request, state}
+  @impl true
+  def handle_call(request, _from, {%Connection{} = connection, state}) do
+    {:reply, request, {connection, state}}
   end
 
-  @impl Wtransport.ConnectionHandler
-  def handle_cast(_request, %Connection{} = _connection, state) do
-    {:noreply, state}
+  @impl true
+  def handle_cast(_request, {%Connection{} = connection, state}) do
+    {:noreply, {connection, state}}
   end
 end

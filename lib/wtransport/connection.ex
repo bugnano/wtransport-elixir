@@ -1,10 +1,16 @@
 defmodule Wtransport.Connection do
-  defstruct [
-    :session,
-    :stable_id,
-    :request_tx,
-    :send_dgram_tx
-  ]
+  use TypedStruct
+
+  alias Wtransport.Session
+
+  typedstruct do
+    field(:session, Session.t(), enforce: true)
+    field(:stable_id, non_neg_integer(), enforce: true)
+    field(:stream_handler, atom())
+    field(:supervisor_pid, pid(), enforce: true)
+    field(:request_tx, reference(), enforce: true)
+    field(:send_dgram_tx, reference(), enforce: true)
+  end
 
   def send_datagram(%__MODULE__{send_dgram_tx: send_dgram_tx} = _connection, dgram)
       when not is_nil(send_dgram_tx) and is_binary(dgram) do
