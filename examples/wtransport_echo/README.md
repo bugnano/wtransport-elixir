@@ -9,7 +9,6 @@ After installing:
 - Erlang/OTP (version 24 or greater)
 - Elixir (version 1.12 or greater)
 - The Rust compiler + Cargo
-- The Clang C compiler + CMake
 
 Run the command:
 
