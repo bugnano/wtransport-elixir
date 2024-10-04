@@ -56,7 +56,7 @@ defmodule Wtransport.StreamHandler do
             |> Map.merge(Map.from_struct(request))
           )
 
-        {:ok, {stream, state}, {:continue, :stream_request}}
+        {:ok, {stream, state}, {:continue, :wtransport_stream_request}}
       end
 
       @impl true
@@ -71,8 +71,8 @@ defmodule Wtransport.StreamHandler do
       end
 
       @impl true
-      def handle_continue(:stream_request, {%Stream{} = stream, state}) do
-        Logger.debug(":stream_request")
+      def handle_continue(:wtransport_stream_request, {%Stream{} = stream, state}) do
+        Logger.debug(":wtransport_stream_request")
 
         case handle_stream(stream, state) do
           {:continue, new_state} ->
@@ -101,8 +101,8 @@ defmodule Wtransport.StreamHandler do
       end
 
       @impl true
-      def handle_info({:error, error}, {%Stream{} = stream, state}) do
-        Logger.debug(":error")
+      def handle_info({:wtransport_error, error}, {%Stream{} = stream, state}) do
+        Logger.debug(":wtransport_error")
 
         handle_error(error, stream, state)
 
@@ -110,8 +110,8 @@ defmodule Wtransport.StreamHandler do
       end
 
       @impl true
-      def handle_info({:data_received, data}, {%Stream{} = stream, state}) do
-        Logger.debug(":data_received")
+      def handle_info({:wtransport_data_received, data}, {%Stream{} = stream, state}) do
+        Logger.debug(":wtransport_data_received")
 
         case handle_data(data, stream, state) do
           {:continue, new_state} ->
@@ -123,8 +123,8 @@ defmodule Wtransport.StreamHandler do
       end
 
       @impl true
-      def handle_info(:stream_closed, {%Stream{} = stream, state}) do
-        Logger.debug(":stream_closed")
+      def handle_info(:wtransport_stream_closed, {%Stream{} = stream, state}) do
+        Logger.debug(":wtransport_stream_closed")
 
         case handle_close(stream, state) do
           {:continue, new_state} ->

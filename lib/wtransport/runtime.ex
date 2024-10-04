@@ -73,8 +73,8 @@ defmodule Wtransport.Runtime do
   end
 
   @impl true
-  def handle_info({:session_request, %SessionRequest{} = request}, %State{} = state) do
-    Logger.debug(":session_request")
+  def handle_info({:wtransport_session_request, %SessionRequest{} = request}, %State{} = state) do
+    Logger.debug(":wtransport_session_request")
 
     {:ok, _pid} =
       DynamicSupervisor.start_child(

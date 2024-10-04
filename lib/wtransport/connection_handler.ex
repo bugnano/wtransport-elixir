@@ -67,7 +67,7 @@ defmodule Wtransport.ConnectionHandler do
             |> Map.merge(Map.from_struct(runtime_state))
           )
 
-        {:ok, {connection, %{}}, {:continue, :session_request}}
+        {:ok, {connection, %{}}, {:continue, :wtransport_session_request}}
       end
 
       @impl true
@@ -82,8 +82,8 @@ defmodule Wtransport.ConnectionHandler do
       end
 
       @impl true
-      def handle_continue(:session_request, {%Connection{} = connection, state}) do
-        Logger.debug(":session_request")
+      def handle_continue(:wtransport_session_request, {%Connection{} = connection, state}) do
+        Logger.debug(":wtransport_session_request")
 
         case handle_session(connection.session) do
           {:continue, new_state} ->
@@ -101,10 +101,10 @@ defmodule Wtransport.ConnectionHandler do
 
       @impl true
       def handle_info(
-            {:connection_request, %ConnectionRequest{} = request},
+            {:wtransport_connection_request, %ConnectionRequest{} = request},
             {%Connection{} = connection, state}
           ) do
-        Logger.debug(":connection_request")
+        Logger.debug(":wtransport_connection_request")
 
         connection = struct(connection, Map.from_struct(request))
 
@@ -124,8 +124,8 @@ defmodule Wtransport.ConnectionHandler do
       end
 
       @impl true
-      def handle_info({:error, error}, {%Connection{} = connection, state}) do
-        Logger.debug(":error")
+      def handle_info({:wtransport_error, error}, {%Connection{} = connection, state}) do
+        Logger.debug(":wtransport_error")
 
         handle_error(error, connection, state)
 
@@ -133,8 +133,8 @@ defmodule Wtransport.ConnectionHandler do
       end
 
       @impl true
-      def handle_info({:datagram_received, dgram}, {%Connection{} = connection, state}) do
-        Logger.debug(":datagram_received")
+      def handle_info({:wtransport_datagram_received, dgram}, {%Connection{} = connection, state}) do
+        Logger.debug(":wtransport_datagram_received")
 
         case handle_datagram(dgram, connection, state) do
           {:continue, new_state} ->
@@ -147,10 +147,10 @@ defmodule Wtransport.ConnectionHandler do
 
       @impl true
       def handle_info(
-            {:stream_request, %StreamRequest{} = request},
+            {:wtransport_stream_request, %StreamRequest{} = request},
             {%Connection{} = connection, state}
           ) do
-        Logger.debug(":stream_request")
+        Logger.debug(":wtransport_stream_request")
 
         if connection.stream_handler != nil do
           {:ok, _pid} =
@@ -166,8 +166,8 @@ defmodule Wtransport.ConnectionHandler do
       end
 
       @impl true
-      def handle_info(:conn_closed, {%Connection{} = connection, state}) do
-        Logger.debug(":conn_closed")
+      def handle_info(:wtransport_conn_closed, {%Connection{} = connection, state}) do
+        Logger.debug(":wtransport_conn_closed")
 
         handle_close(connection, state)
 

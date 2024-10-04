@@ -21,30 +21,30 @@ defmodule Wtransport.Connection do
 
   def remote_address(%__MODULE__{request_tx: request_tx} = _connection)
       when not is_nil(request_tx) do
-    {:ok, {}} = Wtransport.Native.reply_request(request_tx, :remote_address, self())
+    {:ok, {}} = Wtransport.Native.reply_request(request_tx, :wtransport_remote_address, self())
 
     receive do
-      {:remote_address, host, port} when is_binary(host) and is_integer(port) ->
+      {:wtransport_remote_address, host, port} when is_binary(host) and is_integer(port) ->
         %{host: host, port: port}
     end
   end
 
   def max_datagram_size(%__MODULE__{request_tx: request_tx} = _connection)
       when not is_nil(request_tx) do
-    {:ok, {}} = Wtransport.Native.reply_request(request_tx, :max_datagram_size, self())
+    {:ok, {}} = Wtransport.Native.reply_request(request_tx, :wtransport_max_datagram_size, self())
 
     receive do
-      {:max_datagram_size, max_datagram_size} when is_integer(max_datagram_size) ->
+      {:wtransport_max_datagram_size, max_datagram_size} when is_integer(max_datagram_size) ->
         max_datagram_size
     end
   end
 
   def rtt(%__MODULE__{request_tx: request_tx} = _connection)
       when not is_nil(request_tx) do
-    {:ok, {}} = Wtransport.Native.reply_request(request_tx, :rtt, self())
+    {:ok, {}} = Wtransport.Native.reply_request(request_tx, :wtransport_rtt, self())
 
     receive do
-      {:rtt, rtt} when is_float(rtt) ->
+      {:wtransport_rtt, rtt} when is_float(rtt) ->
         # Rust returns the time in seconds, but it's easier to reason in milliseconds
         rtt * 1000
     end

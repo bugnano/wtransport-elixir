@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use futures::future::select_all;
 use rustler::{
     Atom, Binary, Encoder, Env, LocalPid, NifStruct, OwnedBinary, OwnedEnv, Resource, ResourceArc,
@@ -5,8 +6,6 @@ use rustler::{
 };
 use std::{
     collections::HashMap,
-    error::Error,
-    io,
     net::{SocketAddr, ToSocketAddrs},
     time::Duration,
 };
@@ -23,19 +22,20 @@ mod atoms {
     rustler::atoms! {
         ok,
         error,
-        session_request,
-        connection_request,
-        datagram_received,
-        conn_closed,
-        stream_request,
+        wtransport_error,
+        wtransport_session_request,
+        wtransport_connection_request,
+        wtransport_datagram_received,
+        wtransport_conn_closed,
+        wtransport_stream_request,
         bi,
         uni,
-        data_received,
-        stream_closed,
+        wtransport_data_received,
+        wtransport_stream_closed,
         pid_crashed,
-        remote_address,
-        max_datagram_size,
-        rtt,
+        wtransport_remote_address,
+        wtransport_max_datagram_size,
+        wtransport_rtt,
     }
 }
 
@@ -141,7 +141,7 @@ fn start_runtime_impl(
     port: u16,
     certfile: String,
     keyfile: String,
-) -> Result<NifRuntime, Box<dyn Error>> {
+) -> Result<NifRuntime> {
     let (tx, rx) = crossbeam_channel::unbounded();
     let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
 
@@ -157,7 +157,7 @@ fn start_runtime_impl(
             let identity = match Identity::load_pemfiles(&certfile, &keyfile).await {
                 Ok(identity) => identity,
                 Err(error) => {
-                    let _ = tx.send(Err(error.to_string()));
+                    let _ = tx.send(Err(anyhow!(error)));
                     return;
                 }
             };
@@ -174,17 +174,17 @@ fn start_runtime_impl(
 
                     Ok((Endpoint::server(config)?, bind_address))
                 })
-                .collect::<Result<Vec<(Endpoint<Server>, SocketAddr)>, io::Error>>()
+                .collect::<Result<Vec<(Endpoint<Server>, SocketAddr)>>>()
             {
                 Ok(result) => result,
                 Err(error) => {
-                    let _ = tx.send(Err(error.to_string()));
+                    let _ = tx.send(Err(anyhow!(error)));
                     return;
                 }
             };
 
             if endpoints.is_empty() {
-                let _ = tx.send(Err("bind_address is empty".into()));
+                let _ = tx.send(Err(anyhow!("bind_address is empty")));
                 return;
             }
 
@@ -257,7 +257,7 @@ async fn handle_connection(
     let mut msg_env = OwnedEnv::new();
     let _ = msg_env.send_and_clear(&runtime_pid, |env| {
         (
-            atoms::session_request(),
+            atoms::wtransport_session_request(),
             NifSessionRequest {
                 authority,
                 path,
@@ -275,8 +275,9 @@ async fn handle_connection(
     match handle_connection_impl(shutdown_tx, session_request, request_rx, result, pid).await {
         Ok(()) => (),
         Err(error) => {
-            let _ =
-                msg_env.send_and_clear(&pid, |env| (atoms::error(), error.to_string()).encode(env));
+            let _ = msg_env.send_and_clear(&pid, |env| {
+                (atoms::wtransport_error(), error.to_string()).encode(env)
+            });
             error!("{:?}", error);
         }
     }
@@ -288,7 +289,7 @@ async fn handle_connection_impl(
     mut request_rx: mpsc::Receiver<(Atom, LocalPid)>,
     result: Atom,
     pid: LocalPid,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let mut msg_env = OwnedEnv::new();
     let mut shutdown_rx = shutdown_tx.subscribe();
     let mut id = 0;
@@ -307,7 +308,7 @@ async fn handle_connection_impl(
 
     let _ = msg_env.send_and_clear(&pid, |env| {
         (
-            atoms::connection_request(),
+            atoms::wtransport_connection_request(),
             NifConnectionRequest {
                 stable_id: connection.stable_id(),
                 send_dgram_tx: ResourceArc::new(XDataSender(send_dgram_tx)),
@@ -366,7 +367,7 @@ async fn handle_connection_impl(
 
                 let _ = msg_env.send_and_clear(&pid, |env| {
                     (
-                        atoms::datagram_received(),
+                        atoms::wtransport_datagram_received(),
                         str_data,
                     )
                         .encode(env)
@@ -375,7 +376,7 @@ async fn handle_connection_impl(
                 trace!("Received (dgram) '{str_data}' from client");
             }
             _ = connection.closed() => {
-                let _ = msg_env.send_and_clear(&pid, |env| atoms::conn_closed().encode(env));
+                let _ = msg_env.send_and_clear(&pid, |env| atoms::wtransport_conn_closed().encode(env));
 
                 debug!("Connection closed");
 
@@ -409,27 +410,29 @@ fn handle_request(connection: &Connection, (request, pid): (Atom, LocalPid)) -> 
         info!("Handled pid crashed");
 
         return Some(false);
-    } else if request == atoms::remote_address() {
+    } else if request == atoms::wtransport_remote_address() {
         let remote_address = connection.remote_address();
 
         let _ = msg_env.send_and_clear(&pid, |env| {
             (
-                atoms::remote_address(),
+                atoms::wtransport_remote_address(),
                 remote_address.ip().to_string(),
                 remote_address.port(),
             )
                 .encode(env)
         });
-    } else if request == atoms::max_datagram_size() {
+    } else if request == atoms::wtransport_max_datagram_size() {
         let max_datagram_size = connection.max_datagram_size();
 
         let _ = msg_env.send_and_clear(&pid, |env| {
-            (atoms::max_datagram_size(), max_datagram_size).encode(env)
+            (atoms::wtransport_max_datagram_size(), max_datagram_size).encode(env)
         });
-    } else if request == atoms::rtt() {
+    } else if request == atoms::wtransport_rtt() {
         let rtt = connection.rtt();
 
-        let _ = msg_env.send_and_clear(&pid, |env| (atoms::rtt(), rtt.as_secs_f64()).encode(env));
+        let _ = msg_env.send_and_clear(&pid, |env| {
+            (atoms::wtransport_rtt(), rtt.as_secs_f64()).encode(env)
+        });
     }
 
     None
@@ -447,7 +450,7 @@ async fn handle_stream(
     let mut msg_env = OwnedEnv::new();
     let _ = msg_env.send_and_clear(&socket_pid, |env| {
         (
-            atoms::stream_request(),
+            atoms::wtransport_stream_request(),
             match send_stream {
                 Some(_) => NifStreamRequest {
                     stream_type: atoms::bi(),
@@ -479,8 +482,9 @@ async fn handle_stream(
     {
         Ok(()) => (),
         Err(error) => {
-            let _ =
-                msg_env.send_and_clear(&pid, |env| (atoms::error(), error.to_string()).encode(env));
+            let _ = msg_env.send_and_clear(&pid, |env| {
+                (atoms::wtransport_error(), error.to_string()).encode(env)
+            });
             error!("{:?}", error);
         }
     }
@@ -494,7 +498,7 @@ async fn handle_stream_impl(
     mut write_all_rx: mpsc::Receiver<OwnedBinary>,
     result: Atom,
     pid: LocalPid,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let mut buffer = vec![0; 65536].into_boxed_slice();
     let mut msg_env = OwnedEnv::new();
     let mut shutdown_rx = shutdown_tx.subscribe();
@@ -514,7 +518,7 @@ async fn handle_stream_impl(
                             unsafe { std::str::from_utf8_unchecked(&buffer[..bytes_read]) };
 
                         let _ = msg_env.send_and_clear(&pid, |env| {
-                            (atoms::data_received(), str_data).encode(env)
+                            (atoms::wtransport_data_received(), str_data).encode(env)
                         });
 
                         trace!("Received '{str_data}' from client");
@@ -523,7 +527,7 @@ async fn handle_stream_impl(
                         recv_stream_open = false;
 
                         let _ =
-                            msg_env.send_and_clear(&pid, |env| atoms::stream_closed().encode(env));
+                            msg_env.send_and_clear(&pid, |env| atoms::wtransport_stream_closed().encode(env));
 
                         debug!("Receiving end of stream closed");
                     }
