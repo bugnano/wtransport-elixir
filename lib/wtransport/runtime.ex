@@ -17,7 +17,7 @@ defmodule Wtransport.Runtime do
     typedstruct do
       field(:runtime, Runtime.t(), enforce: true)
       field(:connection_handler, atom(), enforce: true)
-      field(:stream_handler, atom())
+      field(:stream_handler, atom() | nil)
       field(:supervisor_pid, pid(), enforce: true)
     end
   end

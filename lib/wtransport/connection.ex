@@ -6,7 +6,7 @@ defmodule Wtransport.Connection do
   typedstruct do
     field(:session, Session.t(), enforce: true)
     field(:stable_id, non_neg_integer(), enforce: true)
-    field(:stream_handler, atom())
+    field(:stream_handler, atom() | nil)
     field(:supervisor_pid, pid(), enforce: true)
     field(:request_tx, reference(), enforce: true)
     field(:send_dgram_tx, reference(), enforce: true)
