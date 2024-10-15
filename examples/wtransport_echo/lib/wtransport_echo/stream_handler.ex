@@ -6,7 +6,9 @@ defmodule WtransportEcho.StreamHandler do
   # StreamHandler specific callbacks
 
   @impl Wtransport.StreamHandler
-  def handle_stream(%Stream{} = _stream, state) do
+  def handle_stream(%Stream{} = _stream, conn_state) do
+    state = conn_state
+
     {:continue, state}
   end
 

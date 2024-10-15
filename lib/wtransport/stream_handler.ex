@@ -3,7 +3,8 @@ defmodule Wtransport.StreamHandler do
   alias Wtransport.StreamRequest
   alias Wtransport.Stream
 
-  @callback handle_stream(stream :: Stream.t(), state :: term()) :: {:continue, term()} | :close
+  @callback handle_stream(stream :: Stream.t(), conn_state :: term()) ::
+              {:continue, term()} | :close
 
   @callback handle_data(data :: String.t(), stream :: Stream.t(), state :: term()) ::
               {:continue, term()} | :close
@@ -17,7 +18,7 @@ defmodule Wtransport.StreamHandler do
       @behaviour Wtransport.StreamHandler
 
       @impl Wtransport.StreamHandler
-      def handle_stream(%Stream{} = _stream, state), do: {:continue, state}
+      def handle_stream(%Stream{} = _stream, conn_state), do: {:continue, conn_state}
 
       @impl Wtransport.StreamHandler
       def handle_data(_data, %Stream{} = _stream, state),
@@ -37,14 +38,16 @@ defmodule Wtransport.StreamHandler do
 
       # Client
 
-      def start_link({%Connection{} = connection, %StreamRequest{} = request, state, conn_pid}) do
-        GenServer.start_link(__MODULE__, {connection, request, state, conn_pid})
+      def start_link(
+            {%Connection{} = connection, %StreamRequest{} = request, conn_state, conn_pid}
+          ) do
+        GenServer.start_link(__MODULE__, {connection, request, conn_state, conn_pid})
       end
 
       # Server (callbacks)
 
       @impl true
-      def init({%Connection{} = connection, %StreamRequest{} = request, state, conn_pid}) do
+      def init({%Connection{} = connection, %StreamRequest{} = request, conn_state, conn_pid}) do
         Logger.debug("init")
 
         monitor_ref = Process.monitor(conn_pid)
@@ -56,7 +59,7 @@ defmodule Wtransport.StreamHandler do
             |> Map.merge(Map.from_struct(request))
           )
 
-        {:ok, {stream, state}, {:continue, :wtransport_stream_request}}
+        {:ok, {stream, conn_state}, {:continue, :wtransport_stream_request}}
       end
 
       @impl true
@@ -71,10 +74,10 @@ defmodule Wtransport.StreamHandler do
       end
 
       @impl true
-      def handle_continue(:wtransport_stream_request, {%Stream{} = stream, state}) do
+      def handle_continue(:wtransport_stream_request, {%Stream{} = stream, conn_state}) do
         Logger.debug(":wtransport_stream_request")
 
-        case handle_stream(stream, state) do
+        case handle_stream(stream, conn_state) do
           {:continue, new_state} ->
             {:ok, {}} = Wtransport.Native.reply_request(stream.request_tx, :ok, self())
 
@@ -83,7 +86,7 @@ defmodule Wtransport.StreamHandler do
           _ ->
             {:ok, {}} = Wtransport.Native.reply_request(stream.request_tx, :error, self())
 
-            {:stop, :normal, {stream, state}}
+            {:stop, :normal, {stream, conn_state}}
         end
       end
 
