@@ -25,7 +25,7 @@ defmodule Wtransport.MixProject do
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
       {:typed_struct, "~> 0.3"},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:rustler, "~> 0.34"}
+      {:rustler, "~> 0.35"}
     ]
   end
 end

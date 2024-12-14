@@ -168,7 +168,7 @@ fn start_runtime_impl(
 
                     let config = ServerConfig::builder()
                         .with_bind_address(bind_address)
-                        .with_identity(&identity)
+                        .with_identity(identity.clone_identity())
                         .keep_alive_interval(Some(Duration::from_secs(3)))
                         .build();
 
