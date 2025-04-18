@@ -9,7 +9,8 @@ defmodule Wtransport.StreamHandler do
   @callback handle_data(data :: String.t(), stream :: Stream.t(), state :: term()) ::
               {:continue, term()} | :close
 
-  @callback handle_close(stream :: Stream.t(), state :: term()) :: :ok
+  @callback handle_close(stream :: Stream.t(), state :: term()) ::
+              {:continue, term()} | :close
 
   @callback handle_error(reason :: String.t(), stream :: Stream.t(), state :: term()) :: :ok
 
