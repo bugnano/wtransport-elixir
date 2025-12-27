@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, error, info, info_span, trace, Instrument};
+use tracing::{debug, info, info_span, trace, Instrument};
 use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 use wtransport::{
     endpoint::{endpoint_side::Server, IncomingSession, SessionRequest},
@@ -131,7 +131,7 @@ fn start_runtime(
             Ok(runtime)
         }
         Err(error) => {
-            error!("{:?}", error);
+            info!("(start_runtime_impl) Error: {}", error);
             Err(error.to_string())
         }
     }
@@ -240,7 +240,7 @@ async fn handle_connection(
     let session_request = match incoming_session.await {
         Ok(request) => request,
         Err(error) => {
-            error!("{:?}", error);
+            info!("(incoming_session) Error: {}", error);
             return;
         }
     };
@@ -291,7 +291,7 @@ async fn handle_connection(
             let _ = msg_env.send_and_clear(&pid, |env| {
                 (atoms::wtransport_error(), error.to_string()).encode(env)
             });
-            error!("{:?}", error);
+            info!("(handle_connection_impl) Error: {}", error);
         }
     }
 }
@@ -505,7 +505,7 @@ async fn handle_stream(
             let _ = msg_env.send_and_clear(&pid, |env| {
                 (atoms::wtransport_error(), error.to_string()).encode(env)
             });
-            error!("{:?}", error);
+            info!("(handle_stream_impl) Error: {}", error);
         }
     }
 }
