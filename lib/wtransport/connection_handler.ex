@@ -134,7 +134,9 @@ defmodule Wtransport.ConnectionHandler do
 
       @impl true
       def handle_info({:wtransport_datagram_received, dgram}, {%Connection{} = connection, state}) do
-        Logger.debug(":wtransport_datagram_received")
+        if connection.log_network_data do
+          Logger.debug(":wtransport_datagram_received")
+        end
 
         case handle_datagram(dgram, connection, state) do
           {:continue, new_state} ->

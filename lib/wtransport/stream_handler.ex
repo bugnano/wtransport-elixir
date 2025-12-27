@@ -115,7 +115,9 @@ defmodule Wtransport.StreamHandler do
 
       @impl true
       def handle_info({:wtransport_data_received, data}, {%Stream{} = stream, state}) do
-        Logger.debug(":wtransport_data_received")
+        if stream.connection.log_network_data do
+          Logger.debug(":wtransport_data_received")
+        end
 
         case handle_data(data, stream, state) do
           {:continue, new_state} ->

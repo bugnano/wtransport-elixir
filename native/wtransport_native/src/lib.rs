@@ -109,19 +109,21 @@ fn start_runtime(
     port: u16,
     certfile: String,
     keyfile: String,
+    log_network_data: bool,
 ) -> Result<NifRuntime, String> {
     debug!(
-        "start_runtime(pid: {:?}, host: {:?}, port: {:?}, certfile: {:?}, keyfile: {:?})",
+        "start_runtime(pid: {:?}, host: {:?}, port: {:?}, certfile: {:?}, keyfile: {:?}, log_network_data: {:?})",
         pid.as_c_arg(),
         host,
         port,
         certfile,
-        keyfile
+        keyfile,
+        log_network_data
     );
 
     let now = std::time::Instant::now();
 
-    match start_runtime_impl(pid, host, port, certfile, keyfile) {
+    match start_runtime_impl(pid, host, port, certfile, keyfile, log_network_data) {
         Ok(runtime) => {
             let elapsed_time = now.elapsed();
             debug!("elapsed_time (start_runtime): {:?}", elapsed_time);
@@ -141,6 +143,7 @@ fn start_runtime_impl(
     port: u16,
     certfile: String,
     keyfile: String,
+    log_network_data: bool,
 ) -> Result<NifRuntime> {
     let (tx, rx) = crossbeam_channel::unbounded();
     let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
@@ -206,7 +209,7 @@ fn start_runtime_impl(
                             debug!("Connection accepted ({})", bind_address);
 
                             tokio::spawn(
-                                handle_connection(pid, shutdown_tx2.clone(), incoming_session)
+                                handle_connection(pid, shutdown_tx2.clone(), incoming_session, log_network_data)
                                     .instrument(info_span!("Connection", id)),
                             );
                         }
@@ -230,6 +233,7 @@ async fn handle_connection(
     runtime_pid: LocalPid,
     shutdown_tx: broadcast::Sender<()>,
     incoming_session: IncomingSession,
+    log_network_data: bool,
 ) {
     info!("Waiting for session request...");
 
@@ -272,7 +276,16 @@ async fn handle_connection(
 
     let (result, pid) = request_rx.recv().await.unwrap();
 
-    match handle_connection_impl(shutdown_tx, session_request, request_rx, result, pid).await {
+    match handle_connection_impl(
+        shutdown_tx,
+        session_request,
+        request_rx,
+        result,
+        pid,
+        log_network_data,
+    )
+    .await
+    {
         Ok(()) => (),
         Err(error) => {
             let _ = msg_env.send_and_clear(&pid, |env| {
@@ -289,6 +302,7 @@ async fn handle_connection_impl(
     mut request_rx: mpsc::Receiver<(Atom, LocalPid)>,
     result: Atom,
     pid: LocalPid,
+    log_network_data: bool,
 ) -> Result<()> {
     let mut msg_env = OwnedEnv::new();
     let mut shutdown_rx = shutdown_tx.subscribe();
@@ -341,6 +355,7 @@ async fn handle_connection_impl(
                         shutdown_tx.clone(),
                         Some(send_stream),
                         recv_stream,
+                        log_network_data,
                     )
                     .instrument(info_span!("Stream (bi)", id)),
                 );
@@ -356,6 +371,7 @@ async fn handle_connection_impl(
                         shutdown_tx.clone(),
                         None,
                         stream,
+                        log_network_data,
                     )
                     .instrument(info_span!("Stream (uni)", id)),
                 );
@@ -373,7 +389,9 @@ async fn handle_connection_impl(
                         .encode(env)
                 });
 
-                trace!("Received (dgram) '{str_data}' from client");
+                if log_network_data {
+                    trace!("Received (dgram) '{str_data}' from client");
+                }
             }
             _ = connection.closed() => {
                 let _ = msg_env.send_and_clear(&pid, |env| atoms::wtransport_conn_closed().encode(env));
@@ -443,6 +461,7 @@ async fn handle_stream(
     shutdown_tx: broadcast::Sender<()>,
     send_stream: Option<SendStream>,
     recv_stream: RecvStream,
+    log_network_data: bool,
 ) {
     let (request_tx, mut request_rx) = mpsc::channel(1);
     let (write_all_tx, write_all_rx) = mpsc::channel(1);
@@ -477,6 +496,7 @@ async fn handle_stream(
         write_all_rx,
         result,
         pid,
+        log_network_data,
     )
     .await
     {
@@ -498,6 +518,7 @@ async fn handle_stream_impl(
     mut write_all_rx: mpsc::Receiver<OwnedBinary>,
     result: Atom,
     pid: LocalPid,
+    log_network_data: bool,
 ) -> Result<()> {
     let mut buffer = vec![0; 65536].into_boxed_slice();
     let mut msg_env = OwnedEnv::new();
@@ -521,7 +542,9 @@ async fn handle_stream_impl(
                             (atoms::wtransport_data_received(), str_data).encode(env)
                         });
 
-                        trace!("Received '{str_data}' from client");
+                        if log_network_data {
+                            trace!("Received '{str_data}' from client");
+                        }
                     }
                     None => {
                         recv_stream_open = false;
@@ -589,8 +612,14 @@ fn reply_request(
 }
 
 #[rustler::nif]
-fn send_data(tx_channel: ResourceArc<XDataSender>, data: Binary) -> Result<(), String> {
-    trace!("send_data()");
+fn send_data(
+    tx_channel: ResourceArc<XDataSender>,
+    data: Binary,
+    log_network_data: bool,
+) -> Result<(), String> {
+    if log_network_data {
+        trace!("send_data()");
+    }
 
     let now = std::time::Instant::now();
 
@@ -601,8 +630,10 @@ fn send_data(tx_channel: ResourceArc<XDataSender>, data: Binary) -> Result<(), S
 
     match tx_channel.0.blocking_send(owned_data) {
         Ok(_) => {
-            let elapsed_time = now.elapsed();
-            trace!("elapsed_time (send_data): {:?}", elapsed_time);
+            if log_network_data {
+                let elapsed_time = now.elapsed();
+                trace!("elapsed_time (send_data): {:?}", elapsed_time);
+            }
             Ok(())
         }
         Err(error) => Err(error.to_string()),

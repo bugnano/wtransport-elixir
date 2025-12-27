@@ -10,11 +10,16 @@ defmodule Wtransport.Connection do
     field(:supervisor_pid, pid(), enforce: true)
     field(:request_tx, reference(), enforce: true)
     field(:send_dgram_tx, reference(), enforce: true)
+    field(:log_network_data, boolean(), enforce: true)
   end
 
-  def send_datagram(%__MODULE__{send_dgram_tx: send_dgram_tx} = _connection, dgram)
+  def send_datagram(
+        %__MODULE__{send_dgram_tx: send_dgram_tx, log_network_data: log_network_data} =
+          _connection,
+        dgram
+      )
       when not is_nil(send_dgram_tx) and is_binary(dgram) do
-    {:ok, {}} = Wtransport.Native.send_data(send_dgram_tx, dgram)
+    {:ok, {}} = Wtransport.Native.send_data(send_dgram_tx, dgram, log_network_data)
 
     :ok
   end

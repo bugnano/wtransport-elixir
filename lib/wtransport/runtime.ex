@@ -19,6 +19,7 @@ defmodule Wtransport.Runtime do
       field(:connection_handler, atom(), enforce: true)
       field(:stream_handler, atom() | nil)
       field(:supervisor_pid, pid(), enforce: true)
+      field(:log_network_data, boolean(), enforce: true)
     end
   end
 
@@ -39,7 +40,8 @@ defmodule Wtransport.Runtime do
         :certfile,
         :keyfile,
         :connection_handler,
-        :stream_handler
+        :stream_handler,
+        :log_network_data
       ])
 
     host = Keyword.fetch!(wtransport_options, :host)
@@ -48,16 +50,21 @@ defmodule Wtransport.Runtime do
     keyfile = Keyword.fetch!(wtransport_options, :keyfile)
     connection_handler = Keyword.fetch!(wtransport_options, :connection_handler)
     stream_handler = Keyword.get(wtransport_options, :stream_handler)
+    log_network_data = Keyword.get(wtransport_options, :log_network_data, false)
 
     Logger.debug("Starting the wtransport runtime #{inspect(wtransport_options)}")
-    {:ok, runtime} = Wtransport.Native.start_runtime(self(), host, port, certfile, keyfile)
+
+    {:ok, runtime} =
+      Wtransport.Native.start_runtime(self(), host, port, certfile, keyfile, log_network_data)
+
     Logger.info("Started the wtransport runtime #{inspect(wtransport_options)}")
 
     initial_state = %State{
       runtime: runtime,
       connection_handler: connection_handler,
       stream_handler: stream_handler,
-      supervisor_pid: supervisor_pid
+      supervisor_pid: supervisor_pid,
+      log_network_data: log_network_data
     }
 
     {:ok, initial_state}
