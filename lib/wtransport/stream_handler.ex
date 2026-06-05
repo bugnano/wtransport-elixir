@@ -15,7 +15,7 @@ defmodule Wtransport.StreamHandler do
   @callback handle_error(reason :: String.t(), stream :: Stream.t(), state :: term()) :: :ok
 
   defmacro __using__(_opts) do
-    quote location: :keep do
+    quote location: :keep, generated: true do
       @behaviour Wtransport.StreamHandler
 
       @impl Wtransport.StreamHandler

@@ -20,7 +20,7 @@ defmodule Wtransport.ConnectionHandler do
               :ok
 
   defmacro __using__(_opts) do
-    quote location: :keep do
+    quote location: :keep, generated: true do
       @behaviour Wtransport.ConnectionHandler
 
       @impl Wtransport.ConnectionHandler
