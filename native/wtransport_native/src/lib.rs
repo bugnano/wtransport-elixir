@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::future::select_all;
 use rustler::{
     Atom, Binary, Encoder, Env, LocalPid, NifStruct, OwnedBinary, OwnedEnv, Resource, ResourceArc,
@@ -10,12 +10,12 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, info, info_span, trace, Instrument};
-use tracing_subscriber::{filter::LevelFilter, EnvFilter};
+use tracing::{Instrument, debug, info, info_span, trace};
+use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use wtransport::{
-    endpoint::{endpoint_side::Server, IncomingSession, SessionRequest},
-    stream::{RecvStream, SendStream},
     Connection, Endpoint, Identity, ServerConfig,
+    endpoint::{IncomingSession, SessionRequest, endpoint_side::Server},
+    stream::{RecvStream, SendStream},
 };
 
 mod atoms {
@@ -196,7 +196,9 @@ fn start_runtime_impl(
 
                 tokio::select! {
                     _ = async {
-                        for id in 0.. {
+                        let mut id: u64 = 0;
+
+                        loop {
                             let (incoming_session, idx, _remaining_futures) = select_all(
                                 endpoints
                                     .iter()
@@ -212,6 +214,7 @@ fn start_runtime_impl(
                                 handle_connection(pid, shutdown_tx2.clone(), incoming_session, log_network_data)
                                     .instrument(info_span!("Connection", id)),
                             );
+                            id = id.wrapping_add(1);
                         }
                     } => {}
                     _ = shutdown_rx.recv() => {
@@ -306,7 +309,7 @@ async fn handle_connection_impl(
 ) -> Result<()> {
     let mut msg_env = OwnedEnv::new();
     let mut shutdown_rx = shutdown_tx.subscribe();
-    let mut id = 0;
+    let mut id: u64 = 0;
 
     if result != atoms::ok() {
         info!("Session request refused");
@@ -359,7 +362,7 @@ async fn handle_connection_impl(
                     )
                     .instrument(info_span!("Stream (bi)", id)),
                 );
-                id += 1;
+                id = id.wrapping_add(1);
             }
             stream = connection.accept_uni() => {
                 let stream = stream?;
@@ -375,7 +378,7 @@ async fn handle_connection_impl(
                     )
                     .instrument(info_span!("Stream (uni)", id)),
                 );
-                id += 1;
+                id = id.wrapping_add(1);
             }
             dgram = connection.receive_datagram() => {
                 let dgram = dgram?;
@@ -510,6 +513,7 @@ async fn handle_stream(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_stream_impl(
     shutdown_tx: broadcast::Sender<()>,
     mut send_stream: Option<SendStream>,
